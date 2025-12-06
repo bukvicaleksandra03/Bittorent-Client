@@ -1,0 +1,12 @@
+# Build artifacts
+obj/
+bittorrent_client
+parser_test
+
+# Output directories
+parsed_bencode/
+parsed_torrents/
+
+# Debug
+*.dSYM/
+core

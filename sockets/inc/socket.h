@@ -1,5 +1,4 @@
-#ifndef __SOCKET_H_
-#define __SOCKET_H_
+#pragma once
 
 #include <sys/un.h>
 #include <sys/socket.h>
@@ -52,6 +51,3 @@ private:
     int s_backlog;
     std::unique_ptr<Address> s_addr;
 };
-
-
-#endif // __SOCKET_H_

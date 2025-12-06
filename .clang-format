@@ -1,0 +1,18 @@
+---
+BasedOnStyle: Google
+ColumnLimit: 80
+IndentWidth: 4
+UseTab: Never
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AlignAfterOpenBracket: Align
+BinPackArguments: false
+BinPackParameters: false
+PointerAlignment: Left
+SpaceAfterCStyleCast: false
+IncludeBlocks: Regroup
+SortIncludes: true
+---
+

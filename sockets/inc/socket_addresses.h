@@ -1,5 +1,4 @@
-#ifndef __SOCKET_ADDRESSES_H_
-#define __SOCKET_ADDRESSES_H_
+#pragma once
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -87,22 +86,20 @@ struct IPv6Address : public Address {
     }
 
     IPv6Address(const in6_addr& ip, uint16_t port) {
-        addr.sin6_family = AF_INET;
+        addr.sin6_family = AF_INET6;
         addr.sin6_port = htons(port);
         addr.sin6_addr = ip;
-        inet_ntop(AF_INET, &addr.sin6_addr, addrStr, INET6_ADDRSTRLEN);
-        identifier = std::string(addrStr) + ":" + std::to_string(ntohs(addr.sin6_port));
+        inet_ntop(AF_INET6, &addr.sin6_addr, addrStr, INET6_ADDRSTRLEN);
+        identifier = "[" + std::string(addrStr) + "]:" + std::to_string(ntohs(addr.sin6_port));
     }
 
     IPv6Address(const sockaddr* address) {
         addr = *reinterpret_cast<const sockaddr_in6*>(address);
-        inet_ntop(AF_INET, &addr.sin6_addr, addrStr, INET6_ADDRSTRLEN);
-        identifier = std::string(addrStr) + ":" + std::to_string(ntohs(addr.sin6_port));
+        inet_ntop(AF_INET6, &addr.sin6_addr, addrStr, INET6_ADDRSTRLEN);
+        identifier = "[" + std::string(addrStr) + "]:" + std::to_string(ntohs(addr.sin6_port));
     }
 
     const sockaddr* sockaddr_ptr() const { return reinterpret_cast<const sockaddr*>(&addr); }
     socklen_t size() const { return len; }
     int domain() const { return AF_INET6; }
 };
-
-#endif // __SOCKET_ADDRESSES_

@@ -1,27 +1,33 @@
-#ifndef __BENCODE_PARSER_H_
-#define __BENCODE_PARSER_H_
+#pragma once
 
+#include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
-#include <iostream>
+
 #include "bencode_types.h"
+#include "torrent_file.h"
 
-class BencodeParser 
+class BencodeParser
 {
-public:
-    explicit BencodeParser(const std::string& path, std::shared_ptr<BDict> metadata_dict);
+   public:
+    explicit BencodeParser(const std::string& path);
 
-    void parse();
+    std::unique_ptr<TorrentFile> parse();
 
-    void print(std::ostream& os) { metadata_dict->print(os); }
+    void print(std::ostream& os)
+    {
+        metadata_dict->print(os);
+    }
 
-private:
-    int pos;
-    std::vector<char> metadata;
+   private:
+    std::shared_ptr<BDict> metadata_dict;
+    size_t pos;
+    std::vector<uint8_t> metadata;
+    std::vector<uint8_t> info_dict_raw_bytes;
 
-    char get();
-    char peek() const;
+    uint8_t get();
+    uint8_t peek() const;
 
     std::shared_ptr<BString> parse_byte_string();
 
@@ -32,8 +38,4 @@ private:
     std::shared_ptr<BList> parse_list();
 
     std::shared_ptr<BDict> parse_dictionary();
-
-    std::shared_ptr<BDict> metadata_dict;
 };
-
-#endif // __BENCODE_PARSER_H_
