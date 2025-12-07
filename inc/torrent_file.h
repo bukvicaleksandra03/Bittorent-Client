@@ -20,7 +20,6 @@ class TorrentFile
 
     void print(std::ostream& os);
 
-   private:
     // Getters
     const std::string& get_announce() const
     {
@@ -50,6 +49,8 @@ class TorrentFile
     {
         return crypto::to_hex(info_hash);
     }
+
+   private:
     struct File
     {
         std::string crc32;
