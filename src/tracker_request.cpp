@@ -7,11 +7,12 @@
 #include "logger.h"
 #include "socket.h"
 
-TrackerRequest::TrackerRequest(const std::unique_ptr<TorrentFile>& tf)
+TrackerRequest::TrackerRequest(const PeerId& peer_id,
+                               const std::unique_ptr<TorrentFile>& tf)
 {
     extract_host_name_port_and_path(tf->get_announce());
-    _info_hash_raw = tf->get_info_hash();
-    _peer_id = "0000000000000000000000000000000000000000";
+    _info_hash = tf->get_info_hash();
+    _peer_id = peer_id;
     _peer_ip = 0;
     _peer_port = 6881;  // Default BitTorrent port
     _downloaded = 0;
@@ -24,16 +25,12 @@ TrackerRequest::~TrackerRequest() = default;
 
 std::string TrackerRequest::build_request() const
 {
-    // URL-encode the raw info_hash bytes
-    std::string info_hash_encoded = HttpRequest::url_encode(
-        std::string(_info_hash_raw.begin(), _info_hash_raw.end()));
-
     return HttpRequest()
         .method(HttpRequest::Method::GET)
         .host(_tracker_hostname)
         .path(_tracker_path)
-        .query_raw("info_hash", info_hash_encoded)
-        .query("peer_id", _peer_id)
+        .query("info_hash", std::string(_info_hash.begin(), _info_hash.end()))
+        .query("peer_id", std::string(_peer_id.begin(), _peer_id.end()))
         .query("port", std::to_string(_peer_port))
         .query("uploaded", std::to_string(_uploaded))
         .query("downloaded", std::to_string(_downloaded))
@@ -45,7 +42,8 @@ std::string TrackerRequest::build_request() const
         .build();
 }
 
-void TrackerRequest::send()
+void TrackerRequest::send(
+    const std::vector<std::unique_ptr<Address>>& addresses)
 {
     std::string request = build_request();
 
@@ -53,23 +51,23 @@ void TrackerRequest::send()
           std::to_string(_tracker_port));
     LOG_D("Request:\n" + request);
 
-    // Socket socket(AF_INET);
-    // socket.connect(_tracker_hostname, _tracker_port);
-    // socket.send(request.c_str(), request.size());
+    for (const auto& address : addresses)
+    {
+        Socket socket(address->domain());
+        socket.connect(*address);
+        socket.send(request.c_str(), request.size());
 
-    // // Read response
-    // std::string response;
-    // char buffer[4096];
-    // ssize_t bytes_read;
+        std::string response;
+        char buffer[4096];
+        ssize_t bytes_read;
+        while ((bytes_read = socket.read(buffer, sizeof(buffer) - 1)) > 0)
+        {
+            buffer[bytes_read] = '\0';
+            response += buffer;
+        }
 
-    // while ((bytes_read = socket.read(buffer, sizeof(buffer) - 1)) > 0)
-    // {
-    //     buffer[bytes_read] = '\0';
-    //     response += buffer;
-    // }
-
-    // LOG_D("Response:\n" + response);
-    // socket.close();
+        LOG_D("Response:\n" + response);
+    }
 }
 
 void TrackerRequest::extract_host_name_port_and_path(

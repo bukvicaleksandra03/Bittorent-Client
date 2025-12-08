@@ -7,12 +7,14 @@
 #include <unistd.h>
 
 #include <memory>
+#include <vector>
 
 #include "socket_addresses.h"
 
 #define SV_SOCK_PATH "/tmp/unix_socket"
 
-void dns_lookup(const std::string& hostname, const std::string& port);
+std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
+                                                 const std::string& port);
 
 class Socket
 {
@@ -41,7 +43,7 @@ class Socket
 
     const Address& get_address() const;
 
-    void read(void* buffer, int buffer_size);
+    ssize_t read(void* buffer, int buffer_size);
 
     void send(const char* buffer, int buffer_size);
 

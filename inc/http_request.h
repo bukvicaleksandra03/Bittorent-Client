@@ -42,17 +42,9 @@ class HttpRequest
         return *this;
     }
 
-    // Add a query parameter (will be URL-encoded)
     HttpRequest& query(const std::string& key, const std::string& value)
     {
         _query_params.emplace_back(key, value);
-        return *this;
-    }
-
-    // Add a raw query parameter (already URL-encoded, won't be encoded again)
-    HttpRequest& query_raw(const std::string& key, const std::string& value)
-    {
-        _query_params.emplace_back(key, "\x00" + value);  // Prefix to mark raw
         return *this;
     }
 

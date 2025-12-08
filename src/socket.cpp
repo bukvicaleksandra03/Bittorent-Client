@@ -1,10 +1,7 @@
 #include "socket.h"
 
-#include <iostream>
-
-#include "stdexcept"
-
-void dns_lookup(const std::string& hostname, const std::string& port)
+std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
+                                                 const std::string& port)
 {
     struct addrinfo hints
     {
@@ -19,22 +16,28 @@ void dns_lookup(const std::string& hostname, const std::string& port)
         throw std::runtime_error("getaddrinfo() failed");
     }
 
+    std::vector<std::unique_ptr<Address>> addresses;
+
     // Loop through the results
     for (p = res; p != nullptr; p = p->ai_next)
     {
         if (p->ai_family == AF_INET)
         {
-            IPv4Address address(p->ai_addr);
-            std::cout << "IPv4 address: " << address.identifier << std::endl;
+            std::unique_ptr<Address> address =
+                std::make_unique<IPv4Address>(p->ai_addr);
+            addresses.push_back(std::move(address));
         }
         else if (p->ai_family == AF_INET6)
         {
-            IPv6Address address(p->ai_addr);
-            std::cout << "IPv6 address: " << address.identifier << std::endl;
+            std::unique_ptr<Address> address =
+                std::make_unique<IPv6Address>(p->ai_addr);
+            addresses.push_back(std::move(address));
         }
     }
 
     freeaddrinfo(res);  // Don't forget to free!
+
+    return addresses;
 }
 
 Socket::Socket(int domain)
@@ -153,10 +156,13 @@ Socket::~Socket()
     }
 }
 
-void Socket::read(void* buffer, int buffer_size)
+ssize_t Socket::read(void* buffer, int buffer_size)
 {
-    if (::read(s_sockfd, buffer, buffer_size) < 0)
+    ssize_t bytes_read = ::read(s_sockfd, buffer, buffer_size);
+    if (bytes_read < 0)
         throw std::runtime_error("read() failed");
+
+    return bytes_read;
 }
 
 void Socket::send(const char* buffer, int buffer_size)

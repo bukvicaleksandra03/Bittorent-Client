@@ -1,28 +1,54 @@
 #pragma once
 
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <unistd.h>
-#include <fcntl.h>
+
+#include <cstring>
 #include <stdexcept>
 #include <string>
-#include <cstring>
 
-struct Address {
+struct Address
+{
+    enum Type
+    {
+        UNIX,
+        IPv4,
+        IPv6
+    };
+
+    static std::string type_to_string(Type type)
+    {
+        switch (type)
+        {
+            case Type::UNIX:
+                return "UNIX";
+            case Type::IPv4:
+                return "IPv4";
+            case Type::IPv6:
+                return "IPv6";
+            default:
+                return "Unknown";
+        }
+    }
     std::string identifier;
     virtual ~Address() = default;
     virtual const sockaddr* sockaddr_ptr() const = 0;
     virtual socklen_t size() const = 0;
     virtual int domain() const = 0;
+    virtual Type type() const = 0;
 };
 
-struct UnixAddress : public Address {
+struct UnixAddress : public Address
+{
     sockaddr_un addr{};
     socklen_t len = sizeof(addr);
 
-    explicit UnixAddress(const std::string& path) {
+    explicit UnixAddress(const std::string& path)
+    {
         addr.sun_family = AF_UNIX;
         if (path.size() >= sizeof(addr.sun_path))
             throw std::runtime_error("Unix path too long");
@@ -30,22 +56,38 @@ struct UnixAddress : public Address {
         identifier = path;
     }
 
-    UnixAddress(const sockaddr* address) {
+    UnixAddress(const sockaddr* address)
+    {
         addr = *reinterpret_cast<const sockaddr_un*>(address);
         identifier = addr.sun_path;
     }
 
-    const sockaddr* sockaddr_ptr() const { return reinterpret_cast<const sockaddr*>(&addr); }
-    socklen_t size() const { return len; }
-    int domain() const { return AF_UNIX; }
+    const sockaddr* sockaddr_ptr() const
+    {
+        return reinterpret_cast<const sockaddr*>(&addr);
+    }
+    socklen_t size() const
+    {
+        return len;
+    }
+    int domain() const
+    {
+        return AF_UNIX;
+    }
+    Type type() const
+    {
+        return Type::UNIX;
+    }
 };
 
-struct IPv4Address : public Address {
+struct IPv4Address : public Address
+{
     sockaddr_in addr{};
     socklen_t len = sizeof(addr);
     char addrStr[INET_ADDRSTRLEN];
 
-    IPv4Address(const std::string& ip, uint16_t port) {
+    IPv4Address(const std::string& ip, uint16_t port)
+    {
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0)
@@ -53,31 +95,50 @@ struct IPv4Address : public Address {
         identifier = ip + ":" + std::to_string(port);
     }
 
-    IPv4Address(in_addr_t ip, uint16_t port) {
+    IPv4Address(in_addr_t ip, uint16_t port)
+    {
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         addr.sin_addr.s_addr = ip;
         inet_ntop(AF_INET, &addr.sin_addr.s_addr, addrStr, INET_ADDRSTRLEN);
-        identifier = std::string(addrStr) + ":" + std::to_string(ntohs(addr.sin_port));
+        identifier =
+            std::string(addrStr) + ":" + std::to_string(ntohs(addr.sin_port));
     }
 
-    IPv4Address(const sockaddr* address) {
+    IPv4Address(const sockaddr* address)
+    {
         addr = *reinterpret_cast<const sockaddr_in*>(address);
         inet_ntop(AF_INET, &addr.sin_addr.s_addr, addrStr, INET_ADDRSTRLEN);
-        identifier = std::string(addrStr) + ":" + std::to_string(ntohs(addr.sin_port));
+        identifier = "IPv4: " + std::string(addrStr) + ":" +
+                     std::to_string(ntohs(addr.sin_port));
     }
 
-    const sockaddr* sockaddr_ptr() const { return reinterpret_cast<const sockaddr*>(&addr); }
-    socklen_t size() const { return len; }
-    int domain() const { return AF_INET; }
+    const sockaddr* sockaddr_ptr() const
+    {
+        return reinterpret_cast<const sockaddr*>(&addr);
+    }
+    socklen_t size() const
+    {
+        return len;
+    }
+    int domain() const
+    {
+        return AF_INET;
+    }
+    Type type() const
+    {
+        return Type::IPv4;
+    }
 };
 
-struct IPv6Address : public Address {
+struct IPv6Address : public Address
+{
     sockaddr_in6 addr{};
     socklen_t len = sizeof(addr);
     char addrStr[INET6_ADDRSTRLEN];
 
-    IPv6Address(const std::string& ip, uint16_t port) {
+    IPv6Address(const std::string& ip, uint16_t port)
+    {
         addr.sin6_family = AF_INET6;
         addr.sin6_port = htons(port);
         if (::inet_pton(AF_INET6, ip.c_str(), &addr.sin6_addr) <= 0)
@@ -85,21 +146,38 @@ struct IPv6Address : public Address {
         identifier = ip + ":" + std::to_string(port);
     }
 
-    IPv6Address(const in6_addr& ip, uint16_t port) {
+    IPv6Address(const in6_addr& ip, uint16_t port)
+    {
         addr.sin6_family = AF_INET6;
         addr.sin6_port = htons(port);
         addr.sin6_addr = ip;
         inet_ntop(AF_INET6, &addr.sin6_addr, addrStr, INET6_ADDRSTRLEN);
-        identifier = "[" + std::string(addrStr) + "]:" + std::to_string(ntohs(addr.sin6_port));
+        identifier = "[" + std::string(addrStr) +
+                     "]:" + std::to_string(ntohs(addr.sin6_port));
     }
 
-    IPv6Address(const sockaddr* address) {
+    IPv6Address(const sockaddr* address)
+    {
         addr = *reinterpret_cast<const sockaddr_in6*>(address);
         inet_ntop(AF_INET6, &addr.sin6_addr, addrStr, INET6_ADDRSTRLEN);
-        identifier = "[" + std::string(addrStr) + "]:" + std::to_string(ntohs(addr.sin6_port));
+        identifier = "IPv6: [" + std::string(addrStr) +
+                     "]:" + std::to_string(ntohs(addr.sin6_port));
     }
 
-    const sockaddr* sockaddr_ptr() const { return reinterpret_cast<const sockaddr*>(&addr); }
-    socklen_t size() const { return len; }
-    int domain() const { return AF_INET6; }
+    const sockaddr* sockaddr_ptr() const
+    {
+        return reinterpret_cast<const sockaddr*>(&addr);
+    }
+    socklen_t size() const
+    {
+        return len;
+    }
+    int domain() const
+    {
+        return AF_INET6;
+    }
+    Type type() const
+    {
+        return Type::IPv6;
+    }
 };

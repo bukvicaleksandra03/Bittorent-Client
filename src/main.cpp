@@ -8,6 +8,7 @@
 #include "socket.h"
 #include "torrent_file.h"
 #include "tracker_request.h"
+#include "utils.h"
 
 int main(int argc, char* argv[])
 {
@@ -28,10 +29,23 @@ int main(int argc, char* argv[])
         tf->print(oss);
         LOG_I("Torrent info:\n" + oss.str());
 
-        TrackerRequest tracker_request(tf);
+        PeerId peer_id = utils::generate_peer_id();
+        LOG_I("Peer ID: " + utils::to_hex(peer_id));
 
-        // dns_lookup(host, port);
-        tracker_request.send();
+        TrackerRequest tracker_req(peer_id, tf);
+
+        std::vector<std::unique_ptr<Address>> addresses =
+            dns_lookup(tracker_req.get_tracker_hostname(),
+                       std::to_string(tracker_req.get_tracker_port()));
+
+        std::stringstream ss;
+        for (const auto& address : addresses)
+        {
+            ss << address->identifier << std::endl;
+        }
+        LOG_I("Tracker addresses:\n" + ss.str());
+
+        tracker_req.send(addresses);
     }
     catch (const std::exception& e)
     {

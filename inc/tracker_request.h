@@ -5,23 +5,35 @@
 #include <string>
 
 #include "crypto.h"
+#include "socket_addresses.h"
 #include "torrent_file.h"
+#include "utils.h"
 
+using PeerId = utils::PeerId;
 class TrackerRequest
 {
    public:
-    TrackerRequest(const std::unique_ptr<TorrentFile>& tf);
+    TrackerRequest(const PeerId& peer_id,
+                   const std::unique_ptr<TorrentFile>& tf);
     ~TrackerRequest();
 
-    void send();
+    void send(const std::vector<std::unique_ptr<Address>>& addresses);
     void receive();
 
-    // Build the HTTP request string (for debugging/testing)
     std::string build_request() const;
 
+    const std::string& get_tracker_hostname() const
+    {
+        return _tracker_hostname;
+    }
+    uint16_t get_tracker_port() const
+    {
+        return _tracker_port;
+    }
+
    private:
-    crypto::SHA1Hash _info_hash_raw;
-    std::string _peer_id;
+    crypto::SHA1Hash _info_hash;
+    PeerId _peer_id;
     uint32_t _peer_ip;
     uint16_t _peer_port;
     uint64_t _downloaded;
