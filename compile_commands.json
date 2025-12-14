@@ -1,0 +1,134 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++17",
+      "-Wall",
+      "-Wextra",
+      "-g",
+      "-O0",
+      "-Iinc",
+      "-c",
+      "-o",
+      "obj/bencode_parser.o",
+      "src/bencode_parser.cpp"
+    ],
+    "directory": "/home/albukvic/Projects/Bittorent-Client",
+    "file": "/home/albukvic/Projects/Bittorent-Client/src/bencode_parser.cpp",
+    "output": "/home/albukvic/Projects/Bittorent-Client/obj/bencode_parser.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++17",
+      "-Wall",
+      "-Wextra",
+      "-g",
+      "-O0",
+      "-Iinc",
+      "-c",
+      "-o",
+      "obj/torrent_file.o",
+      "src/torrent_file.cpp"
+    ],
+    "directory": "/home/albukvic/Projects/Bittorent-Client",
+    "file": "/home/albukvic/Projects/Bittorent-Client/src/torrent_file.cpp",
+    "output": "/home/albukvic/Projects/Bittorent-Client/obj/torrent_file.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++17",
+      "-Wall",
+      "-Wextra",
+      "-g",
+      "-O0",
+      "-Iinc",
+      "-c",
+      "-o",
+      "obj/utils.o",
+      "src/utils.cpp"
+    ],
+    "directory": "/home/albukvic/Projects/Bittorent-Client",
+    "file": "/home/albukvic/Projects/Bittorent-Client/src/utils.cpp",
+    "output": "/home/albukvic/Projects/Bittorent-Client/obj/utils.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++17",
+      "-Wall",
+      "-Wextra",
+      "-g",
+      "-O0",
+      "-Iinc",
+      "-c",
+      "-o",
+      "obj/socket.o",
+      "src/socket.cpp"
+    ],
+    "directory": "/home/albukvic/Projects/Bittorent-Client",
+    "file": "/home/albukvic/Projects/Bittorent-Client/src/socket.cpp",
+    "output": "/home/albukvic/Projects/Bittorent-Client/obj/socket.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++17",
+      "-Wall",
+      "-Wextra",
+      "-g",
+      "-O0",
+      "-Iinc",
+      "-c",
+      "-o",
+      "obj/ssl_socket.o",
+      "src/ssl_socket.cpp"
+    ],
+    "directory": "/home/albukvic/Projects/Bittorent-Client",
+    "file": "/home/albukvic/Projects/Bittorent-Client/src/ssl_socket.cpp",
+    "output": "/home/albukvic/Projects/Bittorent-Client/obj/ssl_socket.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++17",
+      "-Wall",
+      "-Wextra",
+      "-g",
+      "-O0",
+      "-Iinc",
+      "-c",
+      "-o",
+      "obj/tracker_request.o",
+      "src/tracker_request.cpp"
+    ],
+    "directory": "/home/albukvic/Projects/Bittorent-Client",
+    "file": "/home/albukvic/Projects/Bittorent-Client/src/tracker_request.cpp",
+    "output": "/home/albukvic/Projects/Bittorent-Client/obj/tracker_request.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-c",
+      "-std=c++17",
+      "-Wall",
+      "-Wextra",
+      "-g",
+      "-O0",
+      "-Iinc",
+      "obj/bencode_parser.o",
+      "obj/torrent_file.o",
+      "obj/utils.o",
+      "obj/socket.o",
+      "obj/ssl_socket.o",
+      "obj/tracker_request.o",
+      "-o",
+      "bittorrent_client",
+      "src/main.cpp"
+    ],
+    "directory": "/home/albukvic/Projects/Bittorent-Client",
+    "file": "/home/albukvic/Projects/Bittorent-Client/src/main.cpp",
+    "output": "/home/albukvic/Projects/Bittorent-Client/bittorrent_client"
+  }
+]

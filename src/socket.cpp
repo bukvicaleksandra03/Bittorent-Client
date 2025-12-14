@@ -1,5 +1,7 @@
 #include "socket.h"
 
+#include <sys/types.h>
+
 std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
                                                  const std::string& port)
 {
@@ -156,17 +158,38 @@ Socket::~Socket()
     }
 }
 
-ssize_t Socket::read(void* buffer, int buffer_size)
+void Socket::send(const char* buffer, size_t size)
 {
-    ssize_t bytes_read = ::read(s_sockfd, buffer, buffer_size);
-    if (bytes_read < 0)
-        throw std::runtime_error("read() failed");
-
-    return bytes_read;
+    ssize_t bytes_sent = ::send(s_sockfd, buffer, size, 0);
+    if (bytes_sent <= 0)
+        throw std::runtime_error("send() failed");
+    while (static_cast<size_t>(bytes_sent) < size)
+    {
+        bytes_sent +=
+            ::send(s_sockfd, buffer + bytes_sent, size - bytes_sent, 0);
+        if (bytes_sent <= 0)
+            throw std::runtime_error("send() failed");
+    }
 }
 
-void Socket::send(const char* buffer, int buffer_size)
+ssize_t Socket::recv(void* buffer, size_t size)
 {
-    if (::send(s_sockfd, buffer, buffer_size, 0) < 0)
-        throw std::runtime_error("send() failed");
+    ssize_t bytes_recv = ::recv(s_sockfd, buffer, size, 0);
+    if (bytes_recv < 0)
+        throw std::runtime_error("recv() failed");
+    return bytes_recv;
+}
+
+std::string Socket::recv_all()
+{
+    std::string result;
+    char buffer[4096];
+    ssize_t bytes_read;
+
+    while ((bytes_read = recv(buffer, sizeof(buffer))) > 0)
+    {
+        result.append(buffer, bytes_read);
+    }
+
+    return result;
 }

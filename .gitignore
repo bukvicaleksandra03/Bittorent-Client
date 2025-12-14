@@ -10,3 +10,6 @@ parsed_torrents/
 # Debug
 *.dSYM/
 core
+
+# Clangd index
+.cache/

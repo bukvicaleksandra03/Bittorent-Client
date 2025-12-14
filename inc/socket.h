@@ -43,9 +43,17 @@ class Socket
 
     const Address& get_address() const;
 
-    ssize_t read(void* buffer, int buffer_size);
+    void send(const char* buffer, size_t size);
 
-    void send(const char* buffer, int buffer_size);
+    ssize_t recv(void* buffer, size_t size);
+
+    // Reads until connection closes, returns complete response
+    std::string recv_all();
+
+    int get_fd() const
+    {
+        return s_sockfd;
+    }
 
     ~Socket();
 

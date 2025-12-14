@@ -6,6 +6,7 @@
 #include "http_request.h"
 #include "logger.h"
 #include "socket.h"
+#include "ssl_socket.h"
 
 TrackerRequest::TrackerRequest(const PeerId& peer_id,
                                const std::unique_ptr<TorrentFile>& tf)
@@ -36,6 +37,7 @@ std::string TrackerRequest::build_request() const
         .query("downloaded", std::to_string(_downloaded))
         .query("left", std::to_string(_left))
         .query("compact", "1")
+        .query("numwant", "50")
         .query("event", "started")
         .header("User-Agent", "BitTorrent-Client/1.0")
         .header("Accept", "*/*")
@@ -55,15 +57,18 @@ void TrackerRequest::send(
     {
         Socket socket(address->domain());
         socket.connect(*address);
-        socket.send(request.c_str(), request.size());
 
         std::string response;
-        char buffer[4096];
-        ssize_t bytes_read;
-        while ((bytes_read = socket.read(buffer, sizeof(buffer) - 1)) > 0)
+        if (_tracker_port == 443)
         {
-            buffer[bytes_read] = '\0';
-            response += buffer;
+            SSLSocket ssl_socket(std::move(socket), _tracker_hostname);
+            ssl_socket.send(request.c_str(), request.size());
+            response = ssl_socket.recv_all();
+        }
+        else
+        {
+            socket.send(request.c_str(), request.size());
+            response = socket.recv_all();
         }
 
         LOG_D("Response:\n" + response);

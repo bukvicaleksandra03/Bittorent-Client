@@ -20,7 +20,7 @@ int main(int argc, char* argv[])
     try
     {
         std::string torrent_to_download =
-            "./torrents/ubuntu-25.10-desktop-amd64.iso.torrent";
+            "./torrents/forrest-gump-ost-1994_archive.torrent";
 
         BencodeParser parser(torrent_to_download);
         std::unique_ptr<TorrentFile> tf = parser.parse();
