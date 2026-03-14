@@ -9,6 +9,7 @@
 
 #include "bencode_types.h"
 #include "crypto.h"
+#include "tracker_protocol.h"
 namespace fs = std::filesystem;
 
 class TorrentFile
@@ -45,9 +46,30 @@ class TorrentFile
     {
         return info_hash;
     }
+    const std::vector<crypto::SHA1Hash>& get_piece_hashes() const
+    {
+        return pieces;
+    }
     std::string get_info_hash_hex() const
     {
         return crypto::to_hex(info_hash);
+    }
+
+    const std::string& get_tracker_hostname() const
+    {
+        return tracker_hostname;
+    }
+    uint16_t get_tracker_port() const
+    {
+        return tracker_port;
+    }
+    const std::string& get_tracker_path() const
+    {
+        return tracker_path;
+    }
+    TrackerProtocol get_tracker_protocol() const
+    {
+        return tracker_protocol;
     }
 
    private:
@@ -74,6 +96,14 @@ class TorrentFile
 
     std::vector<std::array<uint8_t, 20>> pieces;
     crypto::SHA1Hash info_hash;
+
+    // Tracker information
+    std::string tracker_hostname;
+    uint16_t tracker_port;
+    std::string tracker_path;
+    TrackerProtocol tracker_protocol;
+
+    void extract_tracker_information(const std::string& announce);
 
     std::vector<std::string> load_list_of_bstrings(BList* list);
 };

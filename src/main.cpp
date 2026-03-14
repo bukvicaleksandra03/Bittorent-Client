@@ -7,20 +7,30 @@
 #include "logger.h"
 #include "socket.h"
 #include "torrent_file.h"
+#include "tracker_factory.h"
 #include "tracker_request.h"
+#include "tracker_response.h"
 #include "utils.h"
 
 int main(int argc, char* argv[])
 {
-    (void)argc;
-    (void)argv;  // Suppress unused warnings
-
     logger::Logger::instance().set_level(logger::Level::DEBUG);
+
+    std::string torrent_to_download;
+
+    if (argc >= 2)
+    {
+        torrent_to_download = argv[1];
+    }
+    else
+    {
+        torrent_to_download =
+            "./torrents/ubuntu-25.10-desktop-amd64.iso.torrent";
+    }
 
     try
     {
-        std::string torrent_to_download =
-            "./torrents/forrest-gump-ost-1994_archive.torrent";
+        LOG_I("Loading torrent: " + torrent_to_download);
 
         BencodeParser parser(torrent_to_download);
         std::unique_ptr<TorrentFile> tf = parser.parse();
@@ -29,23 +39,17 @@ int main(int argc, char* argv[])
         tf->print(oss);
         LOG_I("Torrent info:\n" + oss.str());
 
+        // Generate our peer ID
         PeerId peer_id = utils::generate_peer_id();
         LOG_I("Peer ID: " + utils::to_hex(peer_id));
 
-        TrackerRequest tracker_req(peer_id, tf);
+        // Contact tracker
+        std::unique_ptr<TrackerRequest> tracker_req;
 
-        std::vector<std::unique_ptr<Address>> addresses =
-            dns_lookup(tracker_req.get_tracker_hostname(),
-                       std::to_string(tracker_req.get_tracker_port()));
+        tracker_req = create_tracker_request(peer_id, tf);
 
-        std::stringstream ss;
-        for (const auto& address : addresses)
-        {
-            ss << address->identifier << std::endl;
-        }
-        LOG_I("Tracker addresses:\n" + ss.str());
-
-        tracker_req.send(addresses);
+        TrackerResponse response = tracker_req->send();
+        LOG_I("Tracker response:\n" + response.to_string());
     }
     catch (const std::exception& e)
     {

@@ -4,20 +4,4 @@
         "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
     },
     "clangd.path": "clangd",
-    // Vim settings
-    "vim.timeout": 500,
-    "vim.insertModeKeyBindings": [
-        {
-            "before": [
-                "j",
-                "j"
-            ],
-            "after": [
-                "<Esc>"
-            ]
-        }
-    ],
-    "vim.handleKeys": {
-        "<Esc>": false
-    }
 }

@@ -11,9 +11,18 @@
 class BencodeParser
 {
    public:
+    // Construct from file path
     explicit BencodeParser(const std::string& path);
 
+    // Construct from raw data (for parsing tracker responses)
+    BencodeParser(const uint8_t* data, size_t length);
+    BencodeParser(const std::string& data, bool from_string);
+
+    // Parse as TorrentFile (for .torrent files)
     std::unique_ptr<TorrentFile> parse();
+
+    // Parse and return the root bencode value (for tracker responses)
+    std::shared_ptr<BType> parse_value();
 
     void print(std::ostream& os)
     {

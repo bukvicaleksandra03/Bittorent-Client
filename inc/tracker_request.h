@@ -5,44 +5,39 @@
 #include <string>
 
 #include "crypto.h"
-#include "socket_addresses.h"
 #include "torrent_file.h"
+#include "tracker_response.h"
 #include "utils.h"
 
 using PeerId = utils::PeerId;
+
+// Abstract base class for tracker requests
 class TrackerRequest
 {
    public:
     TrackerRequest(const PeerId& peer_id,
                    const std::unique_ptr<TorrentFile>& tf);
-    ~TrackerRequest();
+    virtual ~TrackerRequest() = default;
 
-    void send(const std::vector<std::unique_ptr<Address>>& addresses);
-    void receive();
+    // Delete copy
+    TrackerRequest(const TrackerRequest&) = delete;
+    TrackerRequest& operator=(const TrackerRequest&) = delete;
 
-    std::string build_request() const;
+    // Send request to tracker and get response
+    virtual TrackerResponse send() = 0;
 
-    const std::string& get_tracker_hostname() const
-    {
-        return _tracker_hostname;
-    }
-    uint16_t get_tracker_port() const
-    {
-        return _tracker_port;
-    }
+   protected:
+    // Tracker connection info (from TorrentFile)
+    std::string _tracker_hostname;
+    uint16_t _tracker_port;
+    std::string _tracker_path;
+    TrackerProtocol _protocol;
 
-   private:
+    // Announce parameters
     crypto::SHA1Hash _info_hash;
     PeerId _peer_id;
-    uint32_t _peer_ip;
     uint16_t _peer_port;
     uint64_t _downloaded;
     uint64_t _left;
     uint64_t _uploaded;
-    uint32_t _event;
-
-    std::string _tracker_hostname;
-    uint16_t _tracker_port;
-    std::string _tracker_path;
-    void extract_host_name_port_and_path(const std::string& announce);
 };

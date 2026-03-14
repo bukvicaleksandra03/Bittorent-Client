@@ -14,14 +14,15 @@
 #define SV_SOCK_PATH "/tmp/unix_socket"
 
 std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
-                                                 const std::string& port);
+                                                 const std::string& port,
+                                                 int socket_type);
 
 class Socket
 {
    public:
-    explicit Socket(int domain);
+    explicit Socket(int domain, int socket_type);
 
-    explicit Socket(int domain, int sockfd);
+    explicit Socket(int domain, int sockfd, int socket_type);
 
     // Delete copy to avoid double-close
     Socket(const Socket&) = delete;
@@ -34,6 +35,8 @@ class Socket
     void bind(Address& address);
 
     void connect(Address& address);
+
+    void connect_with_timeout(Address& address, int timeout_ms);
 
     void listen(int backlog);
 
@@ -55,9 +58,13 @@ class Socket
         return s_sockfd;
     }
 
+    // Set read/write timeout in seconds
+    void set_timeout(int seconds);
+
     ~Socket();
 
    private:
+    int s_socket_type;
     // File descriptor of the socket
     int s_sockfd = -1;
 

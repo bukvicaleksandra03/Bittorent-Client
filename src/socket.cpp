@@ -1,17 +1,34 @@
 #include "socket.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/types.h>
 
+#include <cstring>
+
+#include "logger.h"
+
 std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
-                                                 const std::string& port)
+                                                 const std::string& port,
+                                                 int socket_type)
 {
+    if (socket_type != SOCK_STREAM && socket_type != SOCK_DGRAM)
+    {
+        throw std::runtime_error(
+            "Socket type has to be one of these two options: SOCK_STREAM "
+            "(TCP), SOCK_DGRAM (UDP).");
+    }
+
     struct addrinfo hints
     {
     }, *res, *p;
 
     hints.ai_family = AF_UNSPEC;      // Allow both IPv4 and IPv6
-    hints.ai_socktype = SOCK_STREAM;  // TCP socket
+    hints.ai_socktype = socket_type;  // TCP or UDP
 
+    LOG_D("DNS lookup for " + hostname + ":" + port + " with socket type " +
+          socket_type_to_string(socket_type) + ".");
     int status = getaddrinfo(hostname.c_str(), port.c_str(), &hints, &res);
     if (status != 0)
     {
@@ -25,24 +42,24 @@ std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
     {
         if (p->ai_family == AF_INET)
         {
-            std::unique_ptr<Address> address =
-                std::make_unique<IPv4Address>(p->ai_addr);
+            auto address = std::make_unique<IPv4Address>(p->ai_addr);
+            LOG_D("Found IPv4 address: " + address->identifier);
             addresses.push_back(std::move(address));
         }
         else if (p->ai_family == AF_INET6)
         {
-            std::unique_ptr<Address> address =
-                std::make_unique<IPv6Address>(p->ai_addr);
+            auto address = std::make_unique<IPv6Address>(p->ai_addr);
+            LOG_D("Found IPv6 address: " + address->identifier);
             addresses.push_back(std::move(address));
         }
     }
 
-    freeaddrinfo(res);  // Don't forget to free!
+    freeaddrinfo(res);
 
     return addresses;
 }
 
-Socket::Socket(int domain)
+Socket::Socket(int domain, int socket_type)
 {
     if (domain != AF_UNIX && domain != AF_INET && domain != AF_INET6)
     {
@@ -50,15 +67,22 @@ Socket::Socket(int domain)
             "Domain has to be one of these three options: AF_UNIX, AF_INET, "
             "AF_INET6.");
     }
-    s_sockfd = ::socket(domain, SOCK_STREAM, 0);
+    if (socket_type != SOCK_STREAM && socket_type != SOCK_DGRAM)
+    {
+        throw std::runtime_error(
+            "Socket type has to be one of these two options: SOCK_STREAM "
+            "(TCP), SOCK_DGRAM (UDP).");
+    }
+    s_sockfd = ::socket(domain, socket_type, 0);
     if (s_sockfd == -1)
     {
         throw std::runtime_error("Failed to create socket");
     }
     s_domain = domain;
+    s_socket_type = socket_type;
 }
 
-Socket::Socket(int domain, int sockfd)
+Socket::Socket(int domain, int sockfd, int socket_type)
 {
     if (domain != AF_UNIX && domain != AF_INET && domain != AF_INET6)
     {
@@ -68,6 +92,7 @@ Socket::Socket(int domain, int sockfd)
     }
     s_sockfd = sockfd;
     s_domain = domain;
+    s_socket_type = socket_type;
 }
 
 Socket::Socket(Socket&& other) noexcept
@@ -114,7 +139,77 @@ void Socket::connect(Address& address)
             "You are trying to connect to an address of wrong domain.");
 
     if (::connect(s_sockfd, address.sockaddr_ptr(), address.size()) < 0)
-        throw std::runtime_error("connect() failed");
+        throw std::runtime_error("connect() failed: " +
+                                 std::string(strerror(errno)));
+}
+
+void Socket::connect_with_timeout(Address& address, int timeout_ms)
+{
+    if (address.domain() != s_domain)
+        throw std::runtime_error(
+            "You are trying to connect to an address of wrong domain.");
+
+    // Set socket to non-blocking for connection with timeout
+    int flags = fcntl(s_sockfd, F_GETFL, 0);
+    fcntl(s_sockfd, F_SETFL, flags | O_NONBLOCK);
+
+    int result = ::connect(s_sockfd, address.sockaddr_ptr(), address.size());
+
+    if (result < 0)
+    {
+        if (errno == EINPROGRESS)
+        {
+            // Connection in progress, wait with timeout
+            struct pollfd pfd;
+            pfd.fd = s_sockfd;
+            pfd.events = POLLOUT;
+
+            int poll_result = poll(&pfd, 1, timeout_ms);
+
+            if (poll_result == 0)
+            {
+                // Restore blocking mode before throwing
+                fcntl(s_sockfd, F_SETFL, flags);
+                throw std::runtime_error("connect() timed out");
+            }
+            else if (poll_result < 0)
+            {
+                fcntl(s_sockfd, F_SETFL, flags);
+                throw std::runtime_error("poll() failed during connect");
+            }
+
+            // Check if connection succeeded
+            int error = 0;
+            socklen_t len = sizeof(error);
+            getsockopt(s_sockfd, SOL_SOCKET, SO_ERROR, &error, &len);
+
+            if (error != 0)
+            {
+                fcntl(s_sockfd, F_SETFL, flags);
+                throw std::runtime_error("connect() failed: " +
+                                         std::string(strerror(error)));
+            }
+        }
+        else
+        {
+            fcntl(s_sockfd, F_SETFL, flags);
+            throw std::runtime_error("connect() failed: " +
+                                     std::string(strerror(errno)));
+        }
+    }
+
+    // Restore blocking mode
+    fcntl(s_sockfd, F_SETFL, flags);
+}
+
+void Socket::set_timeout(int seconds)
+{
+    struct timeval tv;
+    tv.tv_sec = seconds;
+    tv.tv_usec = 0;
+
+    setsockopt(s_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(s_sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
 void Socket::listen(int backlog)
@@ -129,7 +224,9 @@ Socket Socket::accept()
     struct sockaddr address;
     int addrlen = sizeof(address);
 
-    Socket socket(s_domain, ::accept(s_sockfd, &address, (socklen_t*)&addrlen));
+    Socket socket(s_domain,
+                  ::accept(s_sockfd, &address, (socklen_t*)&addrlen),
+                  s_socket_type);
 
     std::unique_ptr<Address> addr =
         std::make_unique<IPv4Address>(reinterpret_cast<sockaddr*>(&address));

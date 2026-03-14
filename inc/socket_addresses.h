@@ -11,27 +11,44 @@
 #include <stdexcept>
 #include <string>
 
-struct Address
+#include "bencode_types.h"
+
+inline std::string socket_type_to_string(int socket_type)
 {
-    enum Type
+    switch (socket_type)
+    {
+        case SOCK_STREAM:
+            return "SOCK_STREAM";
+        case SOCK_DGRAM:
+            return "SOCK_DGRAM";
+        default:
+            return "UNKNOWN SOCKET TYPE (" + std::to_string(socket_type) + ")";
+    }
+}
+
+class Address
+{
+   public:
+    enum Domain
     {
         UNIX,
         IPv4,
         IPv6
     };
 
-    static std::string type_to_string(Type type)
+    static std::string domain_to_string(int domain)
     {
-        switch (type)
+        switch (domain)
         {
-            case Type::UNIX:
+            case Domain::UNIX:
                 return "UNIX";
-            case Type::IPv4:
+            case Domain::IPv4:
                 return "IPv4";
-            case Type::IPv6:
+            case Domain::IPv6:
                 return "IPv6";
             default:
-                return "Unknown";
+                throw std::runtime_error("Unknown domain: " +
+                                         std::to_string(domain));
         }
     }
     std::string identifier;
@@ -39,11 +56,11 @@ struct Address
     virtual const sockaddr* sockaddr_ptr() const = 0;
     virtual socklen_t size() const = 0;
     virtual int domain() const = 0;
-    virtual Type type() const = 0;
 };
 
-struct UnixAddress : public Address
+class UnixAddress : public Address
 {
+   public:
     sockaddr_un addr{};
     socklen_t len = sizeof(addr);
 
@@ -74,14 +91,11 @@ struct UnixAddress : public Address
     {
         return AF_UNIX;
     }
-    Type type() const
-    {
-        return Type::UNIX;
-    }
 };
 
-struct IPv4Address : public Address
+class IPv4Address : public Address
 {
+   public:
     sockaddr_in addr{};
     socklen_t len = sizeof(addr);
     char addrStr[INET_ADDRSTRLEN];
@@ -125,14 +139,11 @@ struct IPv4Address : public Address
     {
         return AF_INET;
     }
-    Type type() const
-    {
-        return Type::IPv4;
-    }
 };
 
-struct IPv6Address : public Address
+class IPv6Address : public Address
 {
+   public:
     sockaddr_in6 addr{};
     socklen_t len = sizeof(addr);
     char addrStr[INET6_ADDRSTRLEN];
@@ -175,9 +186,5 @@ struct IPv6Address : public Address
     int domain() const
     {
         return AF_INET6;
-    }
-    Type type() const
-    {
-        return Type::IPv6;
     }
 };

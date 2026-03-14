@@ -22,6 +22,23 @@ BencodeParser::BencodeParser(const std::string& path)
     metadata.assign(buffer.begin(), buffer.end());
 }
 
+BencodeParser::BencodeParser(const uint8_t* data, size_t length)
+    : metadata_dict(std::make_shared<BDict>()), pos(0)
+{
+    metadata.assign(data, data + length);
+}
+
+BencodeParser::BencodeParser(const std::string& data, bool /*from_string*/)
+    : metadata_dict(std::make_shared<BDict>()), pos(0)
+{
+    metadata.assign(data.begin(), data.end());
+}
+
+std::shared_ptr<BType> BencodeParser::parse_value()
+{
+    return parse_bencoding_type();
+}
+
 uint8_t BencodeParser::get()
 {
     if (pos >= metadata.size())

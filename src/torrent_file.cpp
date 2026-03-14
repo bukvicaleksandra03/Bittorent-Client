@@ -26,6 +26,7 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
     }
     announce = metadata_dict->get_val<BString>("announce")->content;
     LOG_D("Tracker: " + announce);
+    extract_tracker_information(announce);
 
     // Announce list
     if (metadata_dict->has_key("announce-list"))
@@ -171,6 +172,11 @@ void TorrentFile::print(std::ostream& os)
     os << "Info hash: " << crypto::to_hex(info_hash) << std::endl;
     os << "Is private: " << (is_private ? "yes" : "no") << std::endl;
     os << "Is multifile: " << (is_multifile ? "yes" : "no") << std::endl;
+    os << "Tracker hostname: " << tracker_hostname << std::endl;
+    os << "Tracker port: " << tracker_port << std::endl;
+    os << "Tracker protocol: " << static_cast<int>(tracker_protocol)
+       << std::endl;
+    os << "Tracker path: " << tracker_path << std::endl;
     if (is_multifile)
     {
         os << "Number of files: " << files.size() << std::endl;
@@ -180,6 +186,59 @@ void TorrentFile::print(std::ostream& os)
             os << "  " << file.path.string() << " (" << file.length << " bytes)"
                << std::endl;
         }
+    }
+}
+
+void TorrentFile::extract_tracker_information(const std::string& announce)
+{
+    // Extract hostname from announce URL
+    // e.g., "https://torrent.ubuntu.com/announce" -> "torrent.ubuntu.com"
+    // Also extract port if it is present
+    // e.g., "https://torrent.ubuntu.com:8080/announce" -> "8080"
+    // e.g., "https://torrent.ubuntu.com/announce" -> "/announce"
+    // if no path is present, use default path "/"
+    size_t start = announce.find("://");
+    if (start != std::string::npos)
+    {
+        std::string proto = announce.substr(0, start);
+        if (proto == "udp")
+        {
+            tracker_protocol = TrackerProtocol::UDP;
+        }
+        else if (proto == "https")
+        {
+            tracker_protocol = TrackerProtocol::HTTPS;
+        }
+        else if (proto == "http")
+        {
+            tracker_protocol = TrackerProtocol::HTTP;
+        }
+        else
+        {
+            throw std::runtime_error("Unknown tracker protocol: " + proto);
+        }
+    }
+    else
+    {
+        throw std::runtime_error("Invalid announce URL: " + announce);
+    }
+    start += 3;  // Skip "://"
+    size_t end = announce.find('/', start);
+    if (end == std::string::npos)
+    {
+        end = announce.length();
+    }
+    tracker_hostname = announce.substr(start, end - start);
+    tracker_path = announce.substr(end);
+    if (tracker_path.empty())
+    {
+        tracker_path = "/";
+    }
+    size_t colon = tracker_hostname.find(':');
+    if (colon != std::string::npos)
+    {
+        tracker_port = std::stoi(tracker_hostname.substr(colon + 1));
+        tracker_hostname = tracker_hostname.substr(0, colon);
     }
 }
 
