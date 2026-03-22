@@ -11,8 +11,6 @@
 #include <stdexcept>
 #include <string>
 
-#include "bencode_types.h"
-
 inline std::string socket_type_to_string(int socket_type)
 {
     switch (socket_type)

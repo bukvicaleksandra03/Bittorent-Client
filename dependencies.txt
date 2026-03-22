@@ -4,3 +4,12 @@
 sudo apt install build-essential libssl-dev
 sudo apt install clangd
 
+sudo apt install libgtest-dev
+
+After installing GTEST:
+```
+cd /usr/src/gtest
+sudo cmake .
+sudo make
+sudo cp lib/*.a /usr/lib
+```
