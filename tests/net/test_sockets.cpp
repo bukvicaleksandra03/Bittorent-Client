@@ -13,9 +13,13 @@ void run_server(bool &ready_flag) {
     char buffer[BUFFER_SIZE] = {0};
     const char *response = "Hello from server";
 
+    // The machine has multiple IP addresses 127.0.0.1 (loopback)
+    // 192.168.1.5 (Wi-Fi), maybe 10.x.x.x (VPN, Docker, etc.).
+    // This marks that we want to accept connections sent to any of these
+    // IPs on port PORT.
     IPv4Address anyAddr(INADDR_ANY, PORT);
 
-    Socket server_socket(AF_INET, SOCK_STREAM);
+    ServerSocket server_socket(AF_INET, SOCK_STREAM);
 
     server_socket.bind(anyAddr);
     server_socket.listen(3);
@@ -24,9 +28,7 @@ void run_server(bool &ready_flag) {
 
     std::cout << "Server listening on port " << PORT << std::endl;
 
-    Socket accept_socket = server_socket.accept();
-
-    std::cout << "Client connected from: " << accept_socket.get_address().identifier << std::endl;
+    AcceptSocket accept_socket = server_socket.accept();
 
     accept_socket.recv(buffer, BUFFER_SIZE);
     std::cout << "Message from client: " << buffer << std::endl;
@@ -51,7 +53,7 @@ TEST(SocketIntegrationTest, SendReceive) {
     const char *message = "Hello from client";
 
     IPv4Address address("127.0.0.1", PORT);
-    Socket client_socket(AF_INET, SOCK_STREAM);
+    ClientSocket client_socket(AF_INET, SOCK_STREAM);
     client_socket.connect(address);
 
     client_socket.send(message, strlen(message));

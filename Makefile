@@ -15,15 +15,9 @@ OBJ_DIR = obj
 TEST_DIR = tests
 
 # Source files
-SOURCES = $(SRC_DIR)/bencode_parser.cpp \
-          $(SRC_DIR)/torrent_file.cpp \
-          $(SRC_DIR)/utils.cpp \
+SOURCES = $(SRC_DIR)/utils.cpp \
           $(SRC_DIR)/net/socket.cpp \
-          $(SRC_DIR)/net/ssl_socket.cpp \
-          $(SRC_DIR)/tracker_request.cpp \
-          $(SRC_DIR)/tracker_request_http.cpp \
-          $(SRC_DIR)/tracker_request_udp.cpp \
-          $(SRC_DIR)/tracker_response.cpp
+          $(SRC_DIR)/net/ssl_socket.cpp
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 
 # Executable names
