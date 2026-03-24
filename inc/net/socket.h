@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "socket.h"
 #include "socket_addresses.h"
 
 #define SV_SOCK_PATH "/tmp/unix_socket"
@@ -30,20 +31,19 @@ class Socket
     Socket(Socket&& other) noexcept;
     Socket& operator=(Socket&& other) noexcept;
 
-    void send(const char* buffer, size_t size);
+    // void send(const char* buffer, size_t size);
 
-    ssize_t recv(void* buffer, size_t size);
+    // ssize_t recv(void* buffer, size_t size);
 
-    // Reads until connection closes, returns complete response
-    std::string recv_all();
+    // // Reads until connection closes, returns complete response
+    // std::string recv_all();
 
-    // Set read/write timeout in seconds
-    void set_timeout(int seconds);
+    // // Set read/write timeout in seconds
+    // void set_timeout(int seconds);
 
     ~Socket();
 
    protected:
-
     Socket(int domain, int socket_type);
 
     // File descriptor of the socket
@@ -56,44 +56,49 @@ class Socket
     void verify_socket_type(int socket_type);
 };
 
-class AcceptSocket;
+class TCPAcceptSocket;
 // Also known as Passive Sockets
-class ServerSocket: public Socket 
+class TCPServerSocket : public Socket
 {
-  public:
-    explicit ServerSocket(int domain, int socket_type);
+   public:
+    explicit TCPServerSocket(int domain, int socket_type);
 
     // Move constructor and operator
-    ServerSocket(ServerSocket&& other) noexcept;
-    ServerSocket& operator=(ServerSocket&& other) noexcept;
+    TCPServerSocket(TCPServerSocket&& other) noexcept;
+    TCPServerSocket& operator=(TCPServerSocket&& other) noexcept;
 
     void bind(Address& address);
 
     void listen(int backlog);
 
-    AcceptSocket accept();
-  private:
+    TCPAcceptSocket accept();
 
-    // It specifies the limit of pending connections to this socket.
+   private:
+    // The kernel must record some information about each pending connection
+    // request so that a subsequent accept() can be processed. The backlog
+    // argument allows us to limit the number of such pending connections.
+    // Connection requests up to this limit succeed immediately. (For TCP
+    // sockets, the story is a little more complicated, as we’ll see in
+    // Section 61.6.4.) Further connection requests block until a pending
+    // connection is accepted (via accept()), and thus removed from the queue of
+    // pending connections
     int s_backlog;
 };
 
 // Socket which is created on the server when a connection is accepted
-class AcceptSocket: public Socket
+class TCPAcceptSocket : public Socket
 {
-  public:
-    explicit AcceptSocket(int domain, int sockfd, int socket_type);
-
+   public:
+    explicit TCPAcceptSocket(int domain, int sockfd, int socket_type);
 };
 
 // Also known as Active Sockets
-class ClientSocket: public Socket
+class TCPClientSocket : public Socket
 {
-  public:
-    explicit ClientSocket(int domain, int socket_type);
+   public:
+    explicit TCPClientSocket(int domain, int socket_type);
 
     void connect(Address& address);
 
     void connect_with_timeout(Address& address, int timeout_ms);
-
 };
