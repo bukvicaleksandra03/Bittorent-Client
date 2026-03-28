@@ -7,9 +7,9 @@
 #include <unistd.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
-#include "socket.h"
 #include "socket_addresses.h"
 
 #define SV_SOCK_PATH "/tmp/unix_socket"
@@ -18,50 +18,53 @@ std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
                                                  const std::string& port,
                                                  int socket_type);
 
-class Socket
+class TCPSocket
 {
    public:
-    Socket() = delete;
+    static const int s_socket_type = SOCK_STREAM;
+
+    TCPSocket() = delete;
 
     // Delete copy to avoid double-close
-    Socket(const Socket&) = delete;
-    Socket& operator=(const Socket&) = delete;
+    TCPSocket(const TCPSocket&) = delete;
+    TCPSocket& operator=(const TCPSocket&) = delete;
 
     // Move constructor and operator
-    Socket(Socket&& other) noexcept;
-    Socket& operator=(Socket&& other) noexcept;
+    TCPSocket(TCPSocket&& other) noexcept;
+    TCPSocket& operator=(TCPSocket&& other) noexcept;
 
-    // void send(const char* buffer, size_t size);
-
-    // ssize_t recv(void* buffer, size_t size);
-
-    // // Reads until connection closes, returns complete response
-    // std::string recv_all();
-
-    // // Set read/write timeout in seconds
-    // void set_timeout(int seconds);
-
-    ~Socket();
+    ~TCPSocket();
 
    protected:
-    Socket(int domain, int socket_type);
+    TCPSocket(int domain);
 
-    // File descriptor of the socket
     int s_sockfd = -1;
+    int s_domain;  // AF_UNIX, AF_INET or AF_INET6
+};
 
-    int s_domain;       // AF_UNIX, AF_INET or AR_INET6
-    int s_socket_type;  // SOCK_STREAM or SOCK_DGRAM
+// Intermediate base for sockets that send and receive data
+class TCPDataSocket : public TCPSocket
+{
+   public:
+    void send(const char* buffer, size_t size);
+    void send_with_timeout(const char* buffer, size_t size, int timeout_ms);
 
-    void verify_domain(int domain);
-    void verify_socket_type(int socket_type);
+    ssize_t recv(void* buffer, size_t size);
+    ssize_t recv_with_timeout(void* buffer, size_t size, int timeout_ms);
+
+    std::string recv_all();
+    std::string recv_all_with_timeout(int timeout_ms);
+
+   protected:
+    explicit TCPDataSocket(int domain) : TCPSocket(domain) {}
 };
 
 class TCPAcceptSocket;
 // Also known as Passive Sockets
-class TCPServerSocket : public Socket
+class TCPServerSocket : public TCPSocket
 {
    public:
-    explicit TCPServerSocket(int domain, int socket_type);
+    explicit TCPServerSocket(int domain);
 
     // Move constructor and operator
     TCPServerSocket(TCPServerSocket&& other) noexcept;
@@ -86,19 +89,34 @@ class TCPServerSocket : public Socket
 };
 
 // Socket which is created on the server when a connection is accepted
-class TCPAcceptSocket : public Socket
+class TCPAcceptSocket : public TCPDataSocket
 {
    public:
-    explicit TCPAcceptSocket(int domain, int sockfd, int socket_type);
+    explicit TCPAcceptSocket(int domain, int sockfd);
 };
 
 // Also known as Active Sockets
-class TCPClientSocket : public Socket
+class TCPClientSocket : public TCPDataSocket
 {
    public:
-    explicit TCPClientSocket(int domain, int socket_type);
+    explicit TCPClientSocket(int domain);
 
     void connect(Address& address);
 
     void connect_with_timeout(Address& address, int timeout_ms);
 };
+
+class UDPSocket
+{
+   public:
+    static const int s_socket_type = SOCK_DGRAM;
+};
+
+class UDPServerSocket : public UDPSocket
+{
+};
+
+class UDPClientSocket : public UDPSocket
+{
+};
+`

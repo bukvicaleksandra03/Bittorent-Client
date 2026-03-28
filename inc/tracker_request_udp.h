@@ -36,15 +36,15 @@ class TrackerRequestUDP : public TrackerRequest
     uint32_t generate_transaction_id();
 
     // UDP connect phase - returns connection_id
-    uint64_t udp_connect(Socket& socket, Address& addr);
+    uint64_t udp_connect(TCPSocket& socket, Address& addr);
 
     // UDP announce phase - returns response
-    TrackerResponse udp_announce(Socket& socket,
+    TrackerResponse udp_announce(TCPSocket& socket,
                                  Address& addr,
                                  uint64_t connection_id);
 
     // Send packet and receive response with timeout
-    ssize_t send_recv(Socket& socket,
+    ssize_t send_recv(TCPSocket& socket,
                       Address& addr,
                       const uint8_t* send_buf,
                       size_t send_len,

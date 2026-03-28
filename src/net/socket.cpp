@@ -3,9 +3,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 
 #include <cstring>
+#include <string>
 
 #include "logger.h"
 
@@ -59,23 +61,25 @@ std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
     return addresses;
 }
 
-Socket::Socket(int domain, int socket_type) {
-    verify_domain(domain);
-    verify_socket_type(socket_type);
+TCPSocket::TCPSocket(int domain)
+{
+    if (domain != AF_UNIX && domain != AF_INET && domain != AF_INET6)
+    {
+        throw std::runtime_error(
+            "Domain has to be one of these three options: AF_UNIX, AF_INET, "
+            "AF_INET6.");
+    }
 
     s_domain = domain;
-    s_socket_type = socket_type;
 }
 
-Socket::Socket(Socket&& other) noexcept
-    : s_sockfd(other.s_sockfd),
-      s_domain(other.s_domain),
-      s_socket_type(other.s_socket_type)
+TCPSocket::TCPSocket(TCPSocket&& other) noexcept
+    : s_sockfd(other.s_sockfd), s_domain(other.s_domain)
 {
     other.s_sockfd = -1;
 }
 
-Socket& Socket::operator=(Socket&& other) noexcept
+TCPSocket& TCPSocket::operator=(TCPSocket&& other) noexcept
 {
     if (this != &other)
     {
@@ -85,32 +89,41 @@ Socket& Socket::operator=(Socket&& other) noexcept
         }
         s_sockfd = other.s_sockfd;
         s_domain = other.s_domain;
-        s_socket_type = other.s_socket_type;
 
         other.s_sockfd = -1;
     }
     return *this;
 }
 
-void Socket::set_timeout(int seconds)
+static void poll_or_throw(int fd, short events, int timeout_ms,
+                          const char* op_name)
 {
-    struct timeval tv;
-    tv.tv_sec = seconds;
-    tv.tv_usec = 0;
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = events;
 
-    setsockopt(s_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(s_sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    int ret = poll(&pfd, 1, timeout_ms);
+    if (ret < 0)
+        throw std::runtime_error(std::string(op_name) +
+                                 " poll() failed: " + strerror(errno));
+    if (ret == 0)
+        throw std::runtime_error(std::string(op_name) + " timed out after " +
+                                 std::to_string(timeout_ms) + "ms");
 }
 
-Socket::~Socket()
+TCPSocket::~TCPSocket()
 {
     if (s_sockfd != -1)
     {
+        // Subsequent reads/writes to the local socket yield the SIGPIPE signal
+        // and an EPIPE error. This is also true for the peer socket.
+        ::shutdown(s_sockfd, SHUT_RDWR);
+
         ::close(s_sockfd);
     }
 }
 
-void Socket::send(const char* buffer, size_t size)
+void TCPDataSocket::send(const char* buffer, size_t size)
 {
     ssize_t bytes_sent = ::send(s_sockfd, buffer, size, 0);
     if (bytes_sent <= 0)
@@ -124,7 +137,24 @@ void Socket::send(const char* buffer, size_t size)
     }
 }
 
-ssize_t Socket::recv(void* buffer, size_t size)
+void TCPDataSocket::send_with_timeout(const char* buffer, size_t size,
+                                      int timeout_ms)
+{
+    size_t total_sent = 0;
+    while (total_sent < size)
+    {
+        poll_or_throw(s_sockfd, POLLOUT, timeout_ms, "send()");
+
+        ssize_t n =
+            ::send(s_sockfd, buffer + total_sent, size - total_sent, 0);
+        if (n <= 0)
+            throw std::runtime_error("send() failed: " +
+                                     std::string(strerror(errno)));
+        total_sent += static_cast<size_t>(n);
+    }
+}
+
+ssize_t TCPDataSocket::recv(void* buffer, size_t size)
 {
     ssize_t bytes_recv = ::recv(s_sockfd, buffer, size, 0);
     if (bytes_recv < 0)
@@ -132,8 +162,19 @@ ssize_t Socket::recv(void* buffer, size_t size)
     return bytes_recv;
 }
 
-std::string 
-Socket::recv_all()
+ssize_t TCPDataSocket::recv_with_timeout(void* buffer, size_t size,
+                                         int timeout_ms)
+{
+    poll_or_throw(s_sockfd, POLLIN, timeout_ms, "recv()");
+
+    ssize_t bytes_recv = ::recv(s_sockfd, buffer, size, 0);
+    if (bytes_recv < 0)
+        throw std::runtime_error("recv() failed: " +
+                                 std::string(strerror(errno)));
+    return bytes_recv;
+}
+
+std::string TCPDataSocket::recv_all()
 {
     std::string result;
     char buffer[4096];
@@ -147,66 +188,66 @@ Socket::recv_all()
     return result;
 }
 
-void 
-Socket::verify_domain(int domain) {
-    if (domain != AF_UNIX && domain != AF_INET && domain != AF_INET6)
-    {
-        throw std::runtime_error(
-            "Domain has to be one of these three options: AF_UNIX, AF_INET, "
-            "AF_INET6.");
-    }
-}
-
-void
-Socket::verify_socket_type(int socket_type) {
-    if (socket_type != SOCK_STREAM && socket_type != SOCK_DGRAM)
-    {
-        throw std::runtime_error(
-            "Socket type has to be one of these two options: SOCK_STREAM "
-            "(TCP), SOCK_DGRAM (UDP).");
-    }
-}
-
-ServerSocket::ServerSocket(int domain, int socket_type)
-    : Socket(domain, socket_type)
+std::string TCPDataSocket::recv_all_with_timeout(int timeout_ms)
 {
-    s_sockfd = ::socket(domain, socket_type, 0);
+    std::string result;
+    char buffer[4096];
+
+    for (;;)
+    {
+        poll_or_throw(s_sockfd, POLLIN, timeout_ms, "recv_all()");
+
+        ssize_t bytes_read = ::recv(s_sockfd, buffer, sizeof(buffer), 0);
+        if (bytes_read < 0)
+            throw std::runtime_error("recv() failed: " +
+                                     std::string(strerror(errno)));
+        if (bytes_read == 0)
+            break;
+        result.append(buffer, bytes_read);
+    }
+
+    return result;
+}
+
+TCPServerSocket::TCPServerSocket(int domain) : TCPSocket(domain)
+{
+    s_sockfd = ::socket(domain, s_socket_type, 0);
     if (s_sockfd == -1)
     {
         throw std::runtime_error("Failed to create socket");
     }
 }
 
-ServerSocket::ServerSocket(ServerSocket&& other) noexcept
-    : Socket(std::move(other)), 
-      s_backlog(other.s_backlog)
+TCPServerSocket::TCPServerSocket(TCPServerSocket&& other) noexcept
+    : TCPSocket(std::move(other)), s_backlog(other.s_backlog)
 {
 }
 
-ServerSocket& 
-ServerSocket::operator=(ServerSocket&& other) noexcept {
-    if (this != &other) {
-        Socket::operator=(std::move(other)); 
+TCPServerSocket& TCPServerSocket::operator=(TCPServerSocket&& other) noexcept
+{
+    if (this != &other)
+    {
+        TCPSocket::operator=(std::move(other));
         s_backlog = other.s_backlog;
     }
     return *this;
 }
 
-void 
-ServerSocket::bind(Address& address)
+void TCPServerSocket::bind(Address& address)
 {
-    if (address.domain() != s_domain) {
+    if (address.domain() != s_domain)
+    {
         throw std::runtime_error(
             "You are trying to bind to an address of wrong domain.");
     }
 
-    if (::bind(s_sockfd, address.sockaddr_ptr(), address.size()) < 0) {
+    if (::bind(s_sockfd, address.sockaddr_ptr(), address.size()) < 0)
+    {
         throw std::runtime_error("bind() failed");
     }
 }
 
-void
-ServerSocket::listen(int backlog)
+void TCPServerSocket::listen(int backlog)
 {
     if (::listen(s_sockfd, backlog) < 0)
         throw std::runtime_error("listen() failed");
@@ -214,37 +255,36 @@ ServerSocket::listen(int backlog)
     s_backlog = backlog;
 }
 
-AcceptSocket::AcceptSocket(int domain, int sockfd, int socket_type)
-    : Socket(domain, socket_type)
+TCPAcceptSocket::TCPAcceptSocket(int domain, int sockfd) : TCPDataSocket(domain)
 {
     s_sockfd = sockfd;
 }
 
-AcceptSocket
-ServerSocket::accept()
+TCPAcceptSocket TCPServerSocket::accept()
 {
     struct sockaddr address;
-    int addrlen = sizeof(address);
+    socklen_t addrlen = sizeof(address);
 
-    AcceptSocket socket(s_domain,
-                  ::accept(s_sockfd, &address, (socklen_t*)&addrlen),
-                  s_socket_type);
+    int fd = ::accept(s_sockfd, &address, &addrlen);
+    if (fd < 0)
+    {
+        throw std::runtime_error("accept() failed: " +
+                                 std::string(strerror(errno)));
+    }
 
-    return socket;
+    return TCPAcceptSocket(s_domain, fd);
 }
 
-ClientSocket::ClientSocket(int domain, int socket_type)
-    : Socket(domain, socket_type)
+TCPClientSocket::TCPClientSocket(int domain) : TCPDataSocket(domain)
 {
-    s_sockfd = ::socket(domain, socket_type, 0);
+    s_sockfd = ::socket(domain, s_socket_type, 0);
     if (s_sockfd == -1)
     {
         throw std::runtime_error("Failed to create socket");
     }
 }
 
-void 
-ClientSocket::connect(Address& address)
+void TCPClientSocket::connect(Address& address)
 {
     if (address.domain() != s_domain)
         throw std::runtime_error(
@@ -255,63 +295,78 @@ ClientSocket::connect(Address& address)
                                  std::string(strerror(errno)));
 }
 
-void 
-ClientSocket::connect_with_timeout(Address& address, int timeout_ms)
+void TCPClientSocket::connect_with_timeout(Address& address, int timeout_ms)
 {
     if (address.domain() != s_domain)
         throw std::runtime_error(
             "You are trying to connect to an address of wrong domain.");
 
-    // Set socket to non-blocking for connection with timeout
+    // Step 1: Save original flags and set non-blocking
     int flags = fcntl(s_sockfd, F_GETFL, 0);
-    fcntl(s_sockfd, F_SETFL, flags | O_NONBLOCK);
+    if (flags < 0)
+        throw std::runtime_error("fcntl(F_GETFL) failed: " +
+                                 std::string(strerror(errno)));
 
-    int result = ::connect(s_sockfd, address.sockaddr_ptr(), address.size());
+    if (fcntl(s_sockfd, F_SETFL, flags | O_NONBLOCK) < 0)
+        throw std::runtime_error("fcntl(F_SETFL) failed: " +
+                                 std::string(strerror(errno)));
 
-    if (result < 0)
+    // Step 2: Initiate connect (returns immediately on non-blocking socket)
+    int ret = ::connect(s_sockfd, address.sockaddr_ptr(), address.size());
+
+    if (ret < 0 && errno != EINPROGRESS)
     {
-        if (errno == EINPROGRESS)
-        {
-            // Connection in progress, wait with timeout
-            struct pollfd pfd;
-            pfd.fd = s_sockfd;
-            pfd.events = POLLOUT;
-
-            int poll_result = poll(&pfd, 1, timeout_ms);
-
-            if (poll_result == 0)
-            {
-                // Restore blocking mode before throwing
-                fcntl(s_sockfd, F_SETFL, flags);
-                throw std::runtime_error("connect() timed out");
-            }
-            else if (poll_result < 0)
-            {
-                fcntl(s_sockfd, F_SETFL, flags);
-                throw std::runtime_error("poll() failed during connect");
-            }
-
-            // Check if connection succeeded
-            int error = 0;
-            socklen_t len = sizeof(error);
-            getsockopt(s_sockfd, SOL_SOCKET, SO_ERROR, &error, &len);
-
-            if (error != 0)
-            {
-                fcntl(s_sockfd, F_SETFL, flags);
-                throw std::runtime_error("connect() failed: " +
-                                         std::string(strerror(error)));
-            }
-        }
-        else
-        {
-            fcntl(s_sockfd, F_SETFL, flags);
-            throw std::runtime_error("connect() failed: " +
-                                     std::string(strerror(errno)));
-        }
+        // Restore blocking mode before throwing
+        fcntl(s_sockfd, F_SETFL, flags);
+        throw std::runtime_error("connect() failed: " +
+                                 std::string(strerror(errno)));
     }
 
-    // Restore blocking mode
-    fcntl(s_sockfd, F_SETFL, flags);
-}
+    if (ret == 0)
+    {
+        // Connected immediately (e.g. localhost)
+        fcntl(s_sockfd, F_SETFL, flags);
+        return;
+    }
 
+    // Step 3: Wait for the socket to become writable (connection complete)
+    struct pollfd pfd;
+    pfd.fd = s_sockfd;
+    pfd.events = POLLOUT;
+
+    int poll_ret = poll(&pfd, 1, timeout_ms);
+
+    if (poll_ret < 0)
+    {
+        fcntl(s_sockfd, F_SETFL, flags);
+        throw std::runtime_error("poll() failed: " +
+                                 std::string(strerror(errno)));
+    }
+
+    if (poll_ret == 0)
+    {
+        // Timed out
+        fcntl(s_sockfd, F_SETFL, flags);
+        throw std::runtime_error("connect() timed out after " +
+                                 std::to_string(timeout_ms) + "ms");
+    }
+
+    // Step 4: Check if the connection actually succeeded
+    int so_error = 0;
+    socklen_t len = sizeof(so_error);
+    if (getsockopt(s_sockfd, SOL_SOCKET, SO_ERROR, &so_error, &len) < 0)
+    {
+        fcntl(s_sockfd, F_SETFL, flags);
+        throw std::runtime_error("getsockopt(SO_ERROR) failed: " +
+                                 std::string(strerror(errno)));
+    }
+
+    // Step 5: Restore blocking mode
+    fcntl(s_sockfd, F_SETFL, flags);
+
+    if (so_error != 0)
+    {
+        throw std::runtime_error("connect() failed: " +
+                                 std::string(strerror(so_error)));
+    }
+}
