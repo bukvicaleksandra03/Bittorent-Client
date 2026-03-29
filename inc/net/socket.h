@@ -3,20 +3,27 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <cstddef>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "socket_addresses.h"
-
-#define SV_SOCK_PATH "/tmp/unix_socket"
+#include "net/socket_addresses.h"
 
 std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
                                                  const std::string& port,
                                                  int socket_type);
+
+// TCPSocket(fd, domain, destructor, move)
+// ├── TCPServerSocket(bind, listen, accept)
+// └── TCPDataSocket : TCPSocket(send, recv, recv_all + timeout variants)
+//     ├── TCPAcceptSocket
+//     └── TCPClientSocket(connect, connect_with_timeout)
 
 class TCPSocket
 {
@@ -53,7 +60,6 @@ class TCPDataSocket : public TCPSocket
     ssize_t recv_with_timeout(void* buffer, size_t size, int timeout_ms);
 
     std::string recv_all();
-    std::string recv_all_with_timeout(int timeout_ms);
 
    protected:
     explicit TCPDataSocket(int domain) : TCPSocket(domain) {}
@@ -70,7 +76,7 @@ class TCPServerSocket : public TCPSocket
     TCPServerSocket(TCPServerSocket&& other) noexcept;
     TCPServerSocket& operator=(TCPServerSocket&& other) noexcept;
 
-    void bind(Address& address);
+    void bind(const Address& address);
 
     void listen(int backlog);
 
@@ -101,22 +107,55 @@ class TCPClientSocket : public TCPDataSocket
    public:
     explicit TCPClientSocket(int domain);
 
-    void connect(Address& address);
+    void connect(const Address& address);
 
-    void connect_with_timeout(Address& address, int timeout_ms);
+    void connect_with_timeout(const Address& address, int timeout_ms);
 };
+
+// UDPSocket(fd, domain, destructor, move)
+// ├── UDPServerSocket(bind)
+// └── UDPClientSocket
 
 class UDPSocket
 {
    public:
     static const int s_socket_type = SOCK_DGRAM;
+
+    UDPSocket() = delete;
+
+    // Delete copy to avoid double-close
+    UDPSocket(const UDPSocket&) = delete;
+    UDPSocket& operator=(const UDPSocket&) = delete;
+
+    // Move constructor and operator
+    UDPSocket(UDPSocket&& other) noexcept;
+    UDPSocket& operator=(UDPSocket&& other) noexcept;
+
+    ~UDPSocket();
+
+    static constexpr size_t MAX_UDP_PAYLOAD = 65507;
+
+    std::pair<std::string, std::unique_ptr<Address>> recvfrom();
+
+    void sendto(const std::string& message, const Address& dst_address);
+
+   protected:
+    UDPSocket(int domain);
+
+    int s_sockfd = -1;
+    int s_domain;  // AF_UNIX, AF_INET or AF_INET6
 };
 
 class UDPServerSocket : public UDPSocket
 {
+   public:
+    UDPServerSocket(int domain);
+
+    void bind(const Address& address);
 };
 
 class UDPClientSocket : public UDPSocket
 {
+   public:
+    UDPClientSocket(int domain);
 };
-`
