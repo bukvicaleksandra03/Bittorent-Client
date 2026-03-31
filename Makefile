@@ -1,7 +1,16 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -g -O0
 
-LDFLAGS = -lssl -lcrypto -pthread 
+# OpenSSL
+# libssl - Implements TLS/SSL protocols, handling the handshake, session management, record layer and cipher negotiation
+# libcrypto - provides underlying cryptographic algorithms (AES, RSA, SHA, EC...), X.509 certificate handling and more
+LDFLAGS = -lssl -lcrypto 
+
+# PTHREAD
+# At compile time - Tells the C/C++ standard library headers to use thread-safe variants of functions
+# At link time - Link against the POSIX threads library (libpthread) which provides the threading API 
+# 				 and underpins C++'s <thread>, <mutex>, <condition_variable>, etc. facilities on Linux
+LDFLAGS = -pthread 
 
 # GTEST
 LDFLAGS += -L/usr/lib -lgtest -lgtest_main
@@ -9,6 +18,8 @@ LDFLAGS += -L/usr/lib -lgtest -lgtest_main
 # Includes
 INC_DIR = -I/usr/src/gtest/include
 INC_DIR += -Iinc
+
+
 
 SRC_DIR = src
 OBJ_DIR = obj

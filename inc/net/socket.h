@@ -66,6 +66,7 @@ class TCPDataSocket : public TCPSocket
 };
 
 class TCPAcceptSocket;
+
 // Also known as Passive Sockets
 class TCPServerSocket : public TCPSocket
 {

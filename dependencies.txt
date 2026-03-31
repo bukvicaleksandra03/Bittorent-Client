@@ -9,6 +9,7 @@ sudo apt install libgtest-dev
 After installing GTEST:
 ```
 cd /usr/src/gtest
+sudo apt install cmake
 sudo cmake .
 sudo make
 sudo cp lib/*.a /usr/lib

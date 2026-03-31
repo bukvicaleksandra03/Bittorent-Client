@@ -2,9 +2,17 @@
 
 #include <stdexcept>
 
+#include "net/socket.h"
+
 // Static flag to track if OpenSSL has been initialized
 static bool ssl_initialized = false;
 
+// One-time OpenSSL library initialization.
+// SSL_library_init()           - registers all ciphers and digest algorithms
+// SSL_load_error_strings()     - loads human-readable error messages
+// OpenSSL_add_all_algorithms() - registers all available crypto algorithms
+// Note: these calls are deprecated in OpenSSL 1.1.0+ (auto-initialized),
+// but are kept for compatibility with older versions.
 static void init_openssl()
 {
     if (!ssl_initialized)
@@ -16,6 +24,10 @@ static void init_openssl()
     }
 }
 
+// Retrieves the most recent error from OpenSSL's per-thread error queue
+// and returns it as a human-readable string.
+// ERR_get_error() pops one error off the queue (returns 0 if empty).
+// ERR_error_string_n() converts the numeric code into a descriptive message.
 static std::string get_ssl_error()
 {
     unsigned long err = ERR_get_error();
@@ -27,12 +39,12 @@ static std::string get_ssl_error()
     return std::string(buf);
 }
 
-SSLSocket::SSLSocket(Socket&& socket, const std::string& hostname)
+SSLSocket::SSLSocket(TCPClientSocket&& socket, const std::string& hostname)
     : _socket(std::move(socket))
 {
     init_openssl();
 
-    // Create SSL context using TLS client method
+    // Allocates and initializes an SSL context using TLS client method.
     _ctx = SSL_CTX_new(TLS_client_method());
     if (!_ctx)
         throw std::runtime_error("SSL_CTX_new() failed: " + get_ssl_error());
@@ -45,7 +57,10 @@ SSLSocket::SSLSocket(Socket&& socket, const std::string& hostname)
         throw std::runtime_error("SSL_new() failed: " + get_ssl_error());
     }
 
-    // Set SNI hostname (required by many servers)
+    // Set SNI hostname (required by many servers).
+    // SNI tells the server which domain the client is trying to reach. This is
+    // necessary because a single IP address can host multiple HTTPS sites, and
+    // the server needs to know which TLS certificate to present.
     if (!SSL_set_tlsext_host_name(_ssl, hostname.c_str()))
     {
         SSL_free(_ssl);

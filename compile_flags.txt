@@ -2,7 +2,7 @@
 -Wall
 -Wextra
 -I./inc
-
+-I/usr/src/gtest/include
 
 
 

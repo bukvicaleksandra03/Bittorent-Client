@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstring>
 #include <iostream>
 #include <thread>
@@ -11,7 +12,7 @@
 #define PORT 9090
 
 // Simple server function
-void run_server(bool &ready_flag)
+void run_server(std::atomic<bool> &ready_flag)
 {
     char buffer[BUFFER_SIZE] = {0};
     const char *response = "Hello from server";
@@ -43,7 +44,7 @@ void run_server(bool &ready_flag)
 // Test case
 TEST(SocketIntegrationTest, SendReceive)
 {
-    bool server_ready = false;
+    std::atomic<bool> server_ready{false};
 
     std::thread server_thread(run_server, std::ref(server_ready));
 
@@ -58,7 +59,7 @@ TEST(SocketIntegrationTest, SendReceive)
     const char *message = "Hello from client";
 
     IPv4Address address("127.0.0.1", PORT);
-    TCPClientSocket client_socket(AF_INET, SOCK_STREAM);
+    TCPClientSocket client_socket(AF_INET);
     client_socket.connect(address);
 
     client_socket.send(message, strlen(message));
