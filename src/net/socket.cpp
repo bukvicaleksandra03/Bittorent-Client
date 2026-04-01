@@ -97,6 +97,11 @@ TCPSocket& TCPSocket::operator=(TCPSocket&& other) noexcept
     return *this;
 }
 
+int TCPSocket::get_fd() const
+{
+    return s_sockfd;
+}
+
 static void poll_or_throw(int fd,
                           short events,
                           int timeout_ms,
@@ -185,6 +190,20 @@ std::string TCPDataSocket::recv_all()
     ssize_t bytes_read;
 
     while ((bytes_read = recv(buffer, sizeof(buffer))) > 0)
+    {
+        result.append(buffer, bytes_read);
+    }
+
+    return result;
+}
+
+std::string TCPDataSocket::recv_all_with_timeout(int timeout_ms)
+{
+    std::string result;
+    char buffer[4096];
+    ssize_t bytes_read;
+
+    while ((bytes_read = recv_with_timeout(buffer, sizeof(buffer), timeout_ms)) > 0)
     {
         result.append(buffer, bytes_read);
     }

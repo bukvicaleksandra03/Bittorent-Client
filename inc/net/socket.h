@@ -40,6 +40,9 @@ class TCPSocket
     TCPSocket(TCPSocket&& other) noexcept;
     TCPSocket& operator=(TCPSocket&& other) noexcept;
 
+    // Used when creating an SSL socket
+    int get_fd() const;
+
     ~TCPSocket();
 
    protected:
@@ -56,10 +59,17 @@ class TCPDataSocket : public TCPSocket
     void send(const char* buffer, size_t size);
     void send_with_timeout(const char* buffer, size_t size, int timeout_ms);
 
+    // Blocks until there is something to receive
     ssize_t recv(void* buffer, size_t size);
+
+    // Throws an error if it doesn't start receiving something in timeout_ms
     ssize_t recv_with_timeout(void* buffer, size_t size, int timeout_ms);
 
+    // Calls recv until there is no longer data to be received
     std::string recv_all();
+
+    // Calls recv_all until there is no longer data to be received
+    std::string recv_all_with_timeout(int timeout_ms);
 
    protected:
     explicit TCPDataSocket(int domain) : TCPSocket(domain) {}
