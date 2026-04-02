@@ -10,7 +10,7 @@ LDFLAGS = -lssl -lcrypto
 # At compile time - Tells the C/C++ standard library headers to use thread-safe variants of functions
 # At link time - Link against the POSIX threads library (libpthread) which provides the threading API 
 # 				 and underpins C++'s <thread>, <mutex>, <condition_variable>, etc. facilities on Linux
-LDFLAGS = -pthread 
+LDFLAGS += -pthread 
 
 # GTEST
 LDFLAGS += -L/usr/lib -lgtest -lgtest_main
@@ -32,7 +32,7 @@ SOURCES = $(SRC_DIR)/utils.cpp \
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 
 # Executable names
-.PHONY: all clean dirs test
+.PHONY: all clean dirs test test_%
 
 all: dirs $(TARGET)
 
@@ -44,16 +44,25 @@ $(OBJ_DIR)/%.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INC_DIR) -c $< -o $@
 
 
-TEST_SRC = tests/net/test_sockets.cpp
-TEST_BIN = test_sockets
+# Discover every tests/**/test_*.cpp and derive a binary name from it.
+# tests/net/test_sockets.cpp      -> test_sockets
+# tests/net/test_ssl_sockets.cpp  -> test_ssl_sockets
+TEST_SRCS = $(shell find $(TEST_DIR) -name 'test_*.cpp')
+TEST_BINS = $(patsubst %.cpp,%,$(notdir $(TEST_SRCS)))
 
-# Build test binary
-$(TEST_BIN): $(OBJECTS) $(TEST_SRC)
-	$(CXX) $(CXXFLAGS) $(INC_DIR) $^ -o $@ $(LDFLAGS)
+# Pattern rule: build any test binary from its source + the library objects.
+# The matching source is located with a recursive find so the flat binary
+# name works regardless of subdirectory depth.
+test_%: $(OBJECTS)
+	$(CXX) $(CXXFLAGS) $(INC_DIR) $(OBJECTS) \
+		$$(find $(TEST_DIR) -name '$@.cpp') -o $@ $(LDFLAGS)
 
-# Run tests
-test: $(TEST_BIN)
-	./$(TEST_BIN)
+# `make test` builds and runs every test binary.
+test: $(TEST_BINS)
+	@for bin in $(TEST_BINS); do \
+		echo "========== Running $$bin =========="; \
+		./$$bin || exit 1; \
+	done
 
 clean:
-	rm -rf $(OBJ_DIR)
+	rm -rf $(OBJ_DIR) $(TEST_BINS)

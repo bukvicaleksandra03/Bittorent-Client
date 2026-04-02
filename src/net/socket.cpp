@@ -203,7 +203,8 @@ std::string TCPDataSocket::recv_all_with_timeout(int timeout_ms)
     char buffer[4096];
     ssize_t bytes_read;
 
-    while ((bytes_read = recv_with_timeout(buffer, sizeof(buffer), timeout_ms)) > 0)
+    while ((bytes_read =
+                recv_with_timeout(buffer, sizeof(buffer), timeout_ms)) > 0)
     {
         result.append(buffer, bytes_read);
     }

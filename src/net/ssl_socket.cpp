@@ -1,5 +1,8 @@
 #include "net/ssl_socket.h"
 
+#include <fcntl.h>
+#include <poll.h>
+
 #include <stdexcept>
 
 #include "net/socket.h"
@@ -101,6 +104,97 @@ SSLSocket::SSLSocket(TCPClientSocket&& socket, const std::string& hostname)
     }
 }
 
+SSLSocket::SSLSocket(TCPAcceptSocket&& socket,
+                     const std::string& cert_file,
+                     const std::string& key_file)
+    : _socket(std::move(socket))
+{
+    init_openssl();
+
+    // Create a TLS server context (as opposed to TLS_client_method for
+    // clients). This configures the SSL_CTX to perform the server side of the
+    // TLS handshake.
+    _ctx = SSL_CTX_new(TLS_server_method());
+    if (!_ctx)
+        throw std::runtime_error("SSL_CTX_new() failed: " + get_ssl_error());
+
+    // Load the server's certificate from a PEM file.
+    // The certificate is what the server presents to the client during the
+    // TLS handshake so the client can verify the server's identity.
+    if (SSL_CTX_use_certificate_file(
+            _ctx, cert_file.c_str(), SSL_FILETYPE_PEM) <= 0)
+    {
+        SSL_CTX_free(_ctx);
+        throw std::runtime_error("SSL_CTX_use_certificate_file() failed: " +
+                                 get_ssl_error());
+    }
+
+    // Load the server's private key from a PEM file.
+    // The private key is used during the handshake to prove ownership of the
+    // certificate. It must correspond to the public key in the certificate.
+    if (SSL_CTX_use_PrivateKey_file(_ctx, key_file.c_str(), SSL_FILETYPE_PEM) <=
+        0)
+    {
+        SSL_CTX_free(_ctx);
+        throw std::runtime_error("SSL_CTX_use_PrivateKey_file() failed: " +
+                                 get_ssl_error());
+    }
+
+    // Verify that the loaded private key matches the loaded certificate.
+    // If someone accidentally provides mismatched files, this catches it early
+    // rather than failing with a cryptic error during the handshake.
+    if (!SSL_CTX_check_private_key(_ctx))
+    {
+        SSL_CTX_free(_ctx);
+        throw std::runtime_error("Private key does not match certificate: " +
+                                 get_ssl_error());
+    }
+
+    // Create a new SSL connection object from the context
+    _ssl = SSL_new(_ctx);
+    if (!_ssl)
+    {
+        SSL_CTX_free(_ctx);
+        throw std::runtime_error("SSL_new() failed: " + get_ssl_error());
+    }
+
+    // Bind the SSL object to the accepted socket's file descriptor
+    if (!SSL_set_fd(_ssl, _socket.get_fd()))
+    {
+        SSL_free(_ssl);
+        SSL_CTX_free(_ctx);
+        throw std::runtime_error("SSL_set_fd() failed: " + get_ssl_error());
+    }
+
+    // Perform the server side of the TLS handshake.
+    // SSL_accept() waits for the client to initiate the handshake
+    // (ClientHello), then responds with the server's certificate and negotiates
+    // cipher/keys. This is the mirror of SSL_connect() in the client
+    // constructor.
+    int result = SSL_accept(_ssl);
+    if (result <= 0)
+    {
+        int err = SSL_get_error(_ssl, result);
+        std::string error_msg = "SSL_accept() failed: ";
+
+        switch (err)
+        {
+            case SSL_ERROR_SYSCALL:
+                error_msg += "System call error";
+                break;
+            case SSL_ERROR_SSL:
+                error_msg += get_ssl_error();
+                break;
+            default:
+                error_msg += "Error code " + std::to_string(err);
+        }
+
+        SSL_free(_ssl);
+        SSL_CTX_free(_ctx);
+        throw std::runtime_error(error_msg);
+    }
+}
+
 SSLSocket::~SSLSocket()
 {
     if (_ssl)
@@ -149,24 +243,21 @@ SSLSocket& SSLSocket::operator=(SSLSocket&& other) noexcept
 
 void SSLSocket::send(const char* buffer, size_t size)
 {
-    int bytes_written = SSL_write(_ssl, buffer, static_cast<int>(size));
-    if (bytes_written <= 0)
+    size_t total_written = 0;
+    while (total_written < size)
     {
-        int err = SSL_get_error(_ssl, bytes_written);
-        throw std::runtime_error("SSL_write() failed: error code " +
-                                 std::to_string(err));
-    }
-    while (static_cast<size_t>(bytes_written) < size)
-    {
-        bytes_written += SSL_write(_ssl,
-                                   buffer + bytes_written,
-                                   static_cast<int>(size - bytes_written));
-        if (bytes_written <= 0)
+        int ret = SSL_write(_ssl,
+                            buffer + total_written,
+                            static_cast<int>(size - total_written));
+        if (ret > 0)
         {
-            int err = SSL_get_error(_ssl, bytes_written);
-            throw std::runtime_error("SSL_write() failed: error code " +
-                                     std::to_string(err));
+            total_written += static_cast<size_t>(ret);
+            continue;
         }
+        int err = SSL_get_error(_ssl, ret);
+
+        throw std::runtime_error("SSL_write() failed: error code " +
+                                 std::to_string(err) + " - " + get_ssl_error());
     }
 }
 
@@ -194,12 +285,6 @@ ssize_t SSLSocket::recv(void* buffer, size_t size)
         return 0;
     }
 
-    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
-    {
-        // Non-blocking would need retry, but we're blocking so treat as 0
-        return 0;
-    }
-
     throw std::runtime_error("SSL_read() failed: error code " +
                              std::to_string(err) + " - " + get_ssl_error());
 }
@@ -216,4 +301,128 @@ std::string SSLSocket::recv_all()
     }
 
     return result;
+}
+
+static void poll_or_throw(int fd,
+                          short events,
+                          int timeout_ms,
+                          const char* op_name)
+{
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = events;
+
+    int ret = poll(&pfd, 1, timeout_ms);
+    if (ret < 0)
+        throw std::runtime_error(std::string(op_name) +
+                                 " poll() failed: " + strerror(errno));
+    if (ret == 0)
+        throw std::runtime_error(std::string(op_name) + " timed out after " +
+                                 std::to_string(timeout_ms) + "ms");
+}
+
+void SSLSocket::send_with_timeout(const char* buffer,
+                                  size_t size,
+                                  int timeout_ms)
+{
+    int fd = _socket.get_fd();
+    // Set non-blocking for the duration of this call
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0)
+        throw std::runtime_error("fcntl(F_GETFL) failed: " +
+                                 std::string(strerror(errno)));
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+        throw std::runtime_error("fcntl(F_SETFL) failed: " +
+                                 std::string(strerror(errno)));
+    size_t total_written = 0;
+    while (total_written < size)
+    {
+        int ret = SSL_write(_ssl,
+                            buffer + total_written,
+                            static_cast<int>(size - total_written));
+        if (ret > 0)
+        {
+            total_written += static_cast<size_t>(ret);
+            continue;
+        }
+        int err = SSL_get_error(_ssl, ret);
+        if (err == SSL_ERROR_WANT_WRITE)
+        {
+            poll_or_throw(fd, POLLOUT, timeout_ms, "SSL_write()");
+            continue;
+        }
+        if (err == SSL_ERROR_WANT_READ)
+        {
+            poll_or_throw(fd, POLLIN, timeout_ms, "SSL_write()");
+            continue;
+        }
+        // Restore blocking before throwing
+        fcntl(fd, F_SETFL, flags);
+        throw std::runtime_error("SSL_write() failed: error code " +
+                                 std::to_string(err) + " - " + get_ssl_error());
+    }
+    // Restore blocking mode
+    fcntl(fd, F_SETFL, flags);
+}
+
+ssize_t SSLSocket::recv_with_timeout(void* buffer, size_t size, int timeout_ms)
+{
+    int fd = _socket.get_fd();
+
+    // Set non-blocking for the duration of this call
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0)
+        throw std::runtime_error("fcntl(F_GETFL) failed: " +
+                                 std::string(strerror(errno)));
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+        throw std::runtime_error("fcntl(F_SETFL) failed: " +
+                                 std::string(strerror(errno)));
+
+    // OpenSSL may already have decrypted data buffered internally.
+    // poll() only sees the kernel buffer, so skip it if SSL_pending > 0.
+    if (SSL_pending(_ssl) == 0)
+        poll_or_throw(fd, POLLIN, timeout_ms, "SSL_read()");
+
+    int ret = SSL_read(_ssl, buffer, static_cast<int>(size));
+
+    if (ret > 0)
+    {
+        fcntl(fd, F_SETFL, flags);
+        return ret;
+    }
+
+    int err = SSL_get_error(_ssl, ret);
+
+    if (ret == 0 || err == SSL_ERROR_ZERO_RETURN)
+    {
+        fcntl(fd, F_SETFL, flags);
+        return 0;
+    }
+
+    if (err == SSL_ERROR_WANT_READ)
+    {
+        poll_or_throw(fd, POLLIN, timeout_ms, "SSL_read()");
+        ret = SSL_read(_ssl, buffer, static_cast<int>(size));
+    }
+    else if (err == SSL_ERROR_WANT_WRITE)
+    {
+        poll_or_throw(fd, POLLOUT, timeout_ms, "SSL_read()");
+        ret = SSL_read(_ssl, buffer, static_cast<int>(size));
+    }
+    else
+    {
+        fcntl(fd, F_SETFL, flags);
+        throw std::runtime_error("SSL_read() failed: error code " +
+                                 std::to_string(err) + " - " + get_ssl_error());
+    }
+
+    fcntl(fd, F_SETFL, flags);
+
+    if (ret > 0)
+        return ret;
+    if (ret == 0 || SSL_get_error(_ssl, ret) == SSL_ERROR_ZERO_RETURN)
+        return 0;
+
+    throw std::runtime_error("SSL_read() failed after retry: " +
+                             get_ssl_error());
 }
