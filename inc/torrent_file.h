@@ -7,7 +7,7 @@
 #include <filesystem>
 #include <iostream>
 
-#include "bencode_types.h"
+#include "bencode/bencode_types.h"
 #include "crypto.h"
 #include "tracker_protocol.h"
 namespace fs = std::filesystem;

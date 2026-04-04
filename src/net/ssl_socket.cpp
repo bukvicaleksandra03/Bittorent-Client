@@ -369,7 +369,6 @@ ssize_t SSLSocket::recv_with_timeout(void* buffer, size_t size, int timeout_ms)
 {
     int fd = _socket.get_fd();
 
-    // Set non-blocking for the duration of this call
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0)
         throw std::runtime_error("fcntl(F_GETFL) failed: " +
@@ -378,51 +377,42 @@ ssize_t SSLSocket::recv_with_timeout(void* buffer, size_t size, int timeout_ms)
         throw std::runtime_error("fcntl(F_SETFL) failed: " +
                                  std::string(strerror(errno)));
 
-    // OpenSSL may already have decrypted data buffered internally.
-    // poll() only sees the kernel buffer, so skip it if SSL_pending > 0.
-    if (SSL_pending(_ssl) == 0)
-        poll_or_throw(fd, POLLIN, timeout_ms, "SSL_read()");
-
-    int ret = SSL_read(_ssl, buffer, static_cast<int>(size));
-
-    if (ret > 0)
+    while (true)
     {
-        fcntl(fd, F_SETFL, flags);
-        return ret;
-    }
+        if (SSL_pending(_ssl) == 0)
+            poll_or_throw(fd, POLLIN, timeout_ms, "SSL_read()");
 
-    int err = SSL_get_error(_ssl, ret);
+        int ret = SSL_read(_ssl, buffer, static_cast<int>(size));
 
-    if (ret == 0 || err == SSL_ERROR_ZERO_RETURN)
-    {
-        fcntl(fd, F_SETFL, flags);
-        return 0;
-    }
+        if (ret > 0)
+        {
+            fcntl(fd, F_SETFL, flags);
+            return ret;
+        }
 
-    if (err == SSL_ERROR_WANT_READ)
-    {
-        poll_or_throw(fd, POLLIN, timeout_ms, "SSL_read()");
-        ret = SSL_read(_ssl, buffer, static_cast<int>(size));
-    }
-    else if (err == SSL_ERROR_WANT_WRITE)
-    {
-        poll_or_throw(fd, POLLOUT, timeout_ms, "SSL_read()");
-        ret = SSL_read(_ssl, buffer, static_cast<int>(size));
-    }
-    else
-    {
+        if (ret == 0)
+        {
+            fcntl(fd, F_SETFL, flags);
+            return 0;
+        }
+
+        int err = SSL_get_error(_ssl, ret);
+
+        if (err == SSL_ERROR_ZERO_RETURN)
+        {
+            fcntl(fd, F_SETFL, flags);
+            return 0;
+        }
+        if (err == SSL_ERROR_WANT_READ)
+            continue;
+        if (err == SSL_ERROR_WANT_WRITE)
+        {
+            poll_or_throw(fd, POLLOUT, timeout_ms, "SSL_read()");
+            continue;
+        }
+
         fcntl(fd, F_SETFL, flags);
         throw std::runtime_error("SSL_read() failed: error code " +
                                  std::to_string(err) + " - " + get_ssl_error());
     }
-
-    fcntl(fd, F_SETFL, flags);
-
-    if (ret > 0)
-        return ret;
-    if (ret == 0 || SSL_get_error(_ssl, ret) == SSL_ERROR_ZERO_RETURN)
-        return 0;
-
-    throw std::runtime_error("SSL_read() failed after retry: " +
-                             get_ssl_error());
 }

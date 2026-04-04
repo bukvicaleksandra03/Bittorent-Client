@@ -4,6 +4,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <thread>
 
@@ -26,73 +27,112 @@ struct IgnoreSigpipe
 };
 static IgnoreSigpipe ignore_sigpipe;
 
-static void wait_for_server(std::atomic<bool>& ready)
+// ---------------------------------------------------------------------------
+// Fixture -- eliminates the repeated server-thread scaffolding
+// ---------------------------------------------------------------------------
+class SSLSocketTest : public ::testing::Test
 {
-    while (!ready)
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-}
+  protected:
+    std::thread server_thread_;
+    std::atomic<bool> ready_{false};
+    std::string server_error_;
+    int port_ = 0;
 
-static TCPServerSocket make_listening_server(int port)
-{
-    IPv4Address addr(INADDR_ANY, port);
-    TCPServerSocket server(AF_INET);
-    int opt = 1;
-    setsockopt(server.get_fd(), SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    server.bind(addr);
-    server.listen(1);
-    return server;
-}
+    void SetUp() override
+    {
+        static std::atomic<int> port_counter{19100};
+        port_ = ++port_counter;
+        ready_ = false;
+        server_error_.clear();
+    }
 
-static SSLSocket make_test_client(int port)
-{
-    IPv4Address addr("127.0.0.1", port);
-    TCPClientSocket tcp(AF_INET);
-    tcp.connect(addr);
-    return SSLSocket(std::move(tcp), "localhost");
-}
+    // Safety net: if the test exits early (e.g. ASSERT failure) and
+    // join_server() was never called, we still join the thread so the
+    // process doesn't call std::terminate.
+    void TearDown() override
+    {
+        if (server_thread_.joinable())
+            server_thread_.join();
+    }
+
+    // Starts a background server that listens, accepts one connection,
+    // wraps it in TLS, and hands the SSLSocket to `handler`.
+    // Any exception inside the thread is captured in server_error_.
+    void start_server(std::function<void(SSLSocket)> handler)
+    {
+        server_thread_ = std::thread(
+            [this, handler = std::move(handler)]()
+            {
+                try
+                {
+                    IPv4Address addr(INADDR_ANY, port_);
+                    TCPServerSocket server(AF_INET);
+                    int opt = 1;
+                    setsockopt(server.get_fd(), SOL_SOCKET, SO_REUSEADDR,
+                               &opt, sizeof(opt));
+                    server.bind(addr);
+                    server.listen(1);
+
+                    ready_ = true;
+
+                    TCPAcceptSocket accepted = server.accept();
+                    SSLSocket ssl(std::move(accepted), CERT_FILE, KEY_FILE);
+                    handler(std::move(ssl));
+                }
+                catch (const std::exception& e)
+                {
+                    server_error_ = e.what();
+                }
+            });
+    }
+
+    // Blocks until the server is listening, then connects a TLS client.
+    SSLSocket connect_client()
+    {
+        while (!ready_)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        IPv4Address addr("127.0.0.1", port_);
+        TCPClientSocket tcp(AF_INET);
+        tcp.connect(addr);
+        return SSLSocket(std::move(tcp), "localhost");
+    }
+
+    // Joins the server thread and asserts it finished without error.
+    // Call this inside the test body BEFORE any captured locals go out
+    // of scope, so the lambda can safely access them.
+    void join_server()
+    {
+        if (server_thread_.joinable())
+            server_thread_.join();
+        ASSERT_TRUE(server_error_.empty()) << "Server error: " << server_error_;
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Test 1: Client sends a message, server echoes back a response
 // ---------------------------------------------------------------------------
-TEST(SSLSocketTest, BasicSendReceive)
+TEST_F(SSLSocketTest, BasicSendReceive)
 {
-    const int PORT = 19101;
-    std::atomic<bool> ready{false};
-    std::string error_msg;
-
-    std::thread server_thread([&]() {
-        try
+    start_server(
+        [](SSLSocket ssl)
         {
-            TCPServerSocket server = make_listening_server(PORT);
-            ready = true;
-
-            TCPAcceptSocket accepted = server.accept();
-            SSLSocket ssl_server(std::move(accepted), CERT_FILE, KEY_FILE);
-
             char buf[4096] = {0};
-            ssl_server.recv(buf, sizeof(buf));
+            ssl.recv(buf, sizeof(buf));
 
             const char* reply = "Hello from TLS server";
-            ssl_server.send(reply, strlen(reply));
-        }
-        catch (const std::exception& e)
-        {
-            error_msg = e.what();
-        }
-    });
+            ssl.send(reply, strlen(reply));
+        });
 
-    wait_for_server(ready);
-
-    SSLSocket client = make_test_client(PORT);
+    SSLSocket client = connect_client();
     const char* msg = "Hello from TLS client";
     client.send(msg, strlen(msg));
 
     char buf[4096] = {0};
     ssize_t n = client.recv(buf, sizeof(buf));
 
-    server_thread.join();
+    join_server();
 
-    ASSERT_TRUE(error_msg.empty()) << "Server error: " << error_msg;
     EXPECT_GT(n, 0);
     EXPECT_STREQ(buf, "Hello from TLS server");
 }
@@ -100,43 +140,26 @@ TEST(SSLSocketTest, BasicSendReceive)
 // ---------------------------------------------------------------------------
 // Test 2: Send a large payload (100 KB) to exercise the send loop
 // ---------------------------------------------------------------------------
-TEST(SSLSocketTest, LargePayload)
+TEST_F(SSLSocketTest, LargePayload)
 {
-    const int PORT = 19102;
-    std::atomic<bool> ready{false};
     std::string received_data;
-    std::string error_msg;
 
-    std::thread server_thread([&]() {
-        try
+    start_server(
+        [&received_data](SSLSocket ssl)
         {
-            TCPServerSocket server = make_listening_server(PORT);
-            ready = true;
-
-            TCPAcceptSocket accepted = server.accept();
-            SSLSocket ssl_server(std::move(accepted), CERT_FILE, KEY_FILE);
-
-            received_data = ssl_server.recv_all();
-        }
-        catch (const std::exception& e)
-        {
-            error_msg = e.what();
-        }
-    });
-
-    wait_for_server(ready);
+            received_data = ssl.recv_all();
+        });
 
     const size_t PAYLOAD_SIZE = 100 * 1024;
     std::string large(PAYLOAD_SIZE, 'A');
 
     {
-        SSLSocket client = make_test_client(PORT);
+        SSLSocket client = connect_client();
         client.send(large.c_str(), large.size());
     }
 
-    server_thread.join();
+    join_server();
 
-    ASSERT_TRUE(error_msg.empty()) << "Server error: " << error_msg;
     EXPECT_EQ(received_data.size(), PAYLOAD_SIZE);
     EXPECT_EQ(received_data, large);
 }
@@ -144,165 +167,95 @@ TEST(SSLSocketTest, LargePayload)
 // ---------------------------------------------------------------------------
 // Test 3: recv returns 0 when the peer performs a clean TLS shutdown
 // ---------------------------------------------------------------------------
-TEST(SSLSocketTest, CleanShutdownReturnsZero)
+TEST_F(SSLSocketTest, CleanShutdownReturnsZero)
 {
-    const int PORT = 19103;
-    std::atomic<bool> ready{false};
     ssize_t server_recv_result = -999;
-    std::string error_msg;
 
-    std::thread server_thread([&]() {
-        try
+    start_server(
+        [&server_recv_result](SSLSocket ssl)
         {
-            TCPServerSocket server = make_listening_server(PORT);
-            ready = true;
-
-            TCPAcceptSocket accepted = server.accept();
-            SSLSocket ssl_server(std::move(accepted), CERT_FILE, KEY_FILE);
-
             char buf[1024];
-            server_recv_result = ssl_server.recv(buf, sizeof(buf));
-        }
-        catch (const std::exception& e)
-        {
-            error_msg = e.what();
-        }
-    });
-
-    wait_for_server(ready);
+            server_recv_result = ssl.recv(buf, sizeof(buf));
+        });
 
     {
-        SSLSocket client = make_test_client(PORT);
+        SSLSocket client = connect_client();
     }
 
-    server_thread.join();
+    join_server();
 
-    ASSERT_TRUE(error_msg.empty()) << "Server error: " << error_msg;
     EXPECT_EQ(server_recv_result, 0);
 }
 
 // ---------------------------------------------------------------------------
 // Test 4: send_with_timeout succeeds under normal conditions
 // ---------------------------------------------------------------------------
-TEST(SSLSocketTest, SendWithTimeoutSuccess)
+TEST_F(SSLSocketTest, SendWithTimeoutSuccess)
 {
-    const int PORT = 19104;
-    std::atomic<bool> ready{false};
-    std::string error_msg;
-
-    std::thread server_thread([&]() {
-        try
+    start_server(
+        [](SSLSocket ssl)
         {
-            TCPServerSocket server = make_listening_server(PORT);
-            ready = true;
-
-            TCPAcceptSocket accepted = server.accept();
-            SSLSocket ssl_server(std::move(accepted), CERT_FILE, KEY_FILE);
-
             char buf[4096] = {0};
-            ssl_server.recv(buf, sizeof(buf));
+            ssl.recv(buf, sizeof(buf));
 
             const char* reply = "OK";
-            ssl_server.send(reply, strlen(reply));
-        }
-        catch (const std::exception& e)
-        {
-            error_msg = e.what();
-        }
-    });
+            ssl.send(reply, strlen(reply));
+        });
 
-    wait_for_server(ready);
-
-    SSLSocket client = make_test_client(PORT);
+    SSLSocket client = connect_client();
     const char* msg = "timeout test";
     EXPECT_NO_THROW(client.send_with_timeout(msg, strlen(msg), 5000));
 
     char buf[64] = {0};
     client.recv(buf, sizeof(buf));
 
-    server_thread.join();
+    join_server();
 
-    ASSERT_TRUE(error_msg.empty()) << "Server error: " << error_msg;
     EXPECT_STREQ(buf, "OK");
 }
 
 // ---------------------------------------------------------------------------
 // Test 5: recv_with_timeout throws when no data arrives
 // ---------------------------------------------------------------------------
-TEST(SSLSocketTest, RecvWithTimeoutTimesOut)
+TEST_F(SSLSocketTest, RecvWithTimeoutTimesOut)
 {
-    const int PORT = 19105;
-    std::atomic<bool> ready{false};
-    std::string error_msg;
-
-    std::thread server_thread([&]() {
-        try
+    start_server(
+        [](SSLSocket ssl)
         {
-            TCPServerSocket server = make_listening_server(PORT);
-            ready = true;
-
-            TCPAcceptSocket accepted = server.accept();
-            SSLSocket ssl_server(std::move(accepted), CERT_FILE, KEY_FILE);
-
             std::this_thread::sleep_for(std::chrono::seconds(3));
-        }
-        catch (const std::exception& e)
-        {
-            error_msg = e.what();
-        }
-    });
+        });
 
-    wait_for_server(ready);
-
-    SSLSocket client = make_test_client(PORT);
+    SSLSocket client = connect_client();
     char buf[64];
 
     EXPECT_THROW(client.recv_with_timeout(buf, sizeof(buf), 200),
                  std::runtime_error);
 
-    server_thread.join();
+    join_server();
 }
 
 // ---------------------------------------------------------------------------
 // Test 6: recv_with_timeout succeeds when data arrives within the window
 // ---------------------------------------------------------------------------
-TEST(SSLSocketTest, RecvWithTimeoutSuccess)
+TEST_F(SSLSocketTest, RecvWithTimeoutSuccess)
 {
-    const int PORT = 19106;
-    std::atomic<bool> ready{false};
-    std::string error_msg;
-
-    std::thread server_thread([&]() {
-        try
+    start_server(
+        [](SSLSocket ssl)
         {
-            TCPServerSocket server = make_listening_server(PORT);
-            ready = true;
-
-            TCPAcceptSocket accepted = server.accept();
-            SSLSocket ssl_server(std::move(accepted), CERT_FILE, KEY_FILE);
-
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             const char* msg = "delayed hello";
-            ssl_server.send(msg, strlen(msg));
+            ssl.send(msg, strlen(msg));
 
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-        catch (const std::exception& e)
-        {
-            error_msg = e.what();
-        }
-    });
+        });
 
-    wait_for_server(ready);
-
-    SSLSocket client = make_test_client(PORT);
+    SSLSocket client = connect_client();
     char buf[64] = {0};
 
     ssize_t n = client.recv_with_timeout(buf, sizeof(buf), 5000);
 
-    server_thread.join();
+    join_server();
 
-    ASSERT_TRUE(error_msg.empty()) << "Server error: " << error_msg;
     EXPECT_GT(n, 0);
     EXPECT_STREQ(buf, "delayed hello");
 }
@@ -310,36 +263,19 @@ TEST(SSLSocketTest, RecvWithTimeoutSuccess)
 // ---------------------------------------------------------------------------
 // Test 7: A move-constructed SSLSocket is fully functional
 // ---------------------------------------------------------------------------
-TEST(SSLSocketTest, MoveConstructWorks)
+TEST_F(SSLSocketTest, MoveConstructWorks)
 {
-    const int PORT = 19107;
-    std::atomic<bool> ready{false};
-    std::string error_msg;
-
-    std::thread server_thread([&]() {
-        try
+    start_server(
+        [](SSLSocket ssl)
         {
-            TCPServerSocket server = make_listening_server(PORT);
-            ready = true;
-
-            TCPAcceptSocket accepted = server.accept();
-            SSLSocket ssl_server(std::move(accepted), CERT_FILE, KEY_FILE);
-
             char buf[4096] = {0};
-            ssl_server.recv(buf, sizeof(buf));
+            ssl.recv(buf, sizeof(buf));
 
             const char* reply = "moved";
-            ssl_server.send(reply, strlen(reply));
-        }
-        catch (const std::exception& e)
-        {
-            error_msg = e.what();
-        }
-    });
+            ssl.send(reply, strlen(reply));
+        });
 
-    wait_for_server(ready);
-
-    SSLSocket original = make_test_client(PORT);
+    SSLSocket original = connect_client();
     SSLSocket moved(std::move(original));
 
     const char* msg = "test move";
@@ -348,9 +284,8 @@ TEST(SSLSocketTest, MoveConstructWorks)
     char buf[64] = {0};
     ssize_t n = moved.recv(buf, sizeof(buf));
 
-    server_thread.join();
+    join_server();
 
-    ASSERT_TRUE(error_msg.empty()) << "Server error: " << error_msg;
     EXPECT_GT(n, 0);
     EXPECT_STREQ(buf, "moved");
 }

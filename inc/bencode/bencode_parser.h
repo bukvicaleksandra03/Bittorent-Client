@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "bencode_types.h"
+#include "bencode/bencode_types.h"
 #include "torrent_file.h"
 
 class BencodeParser

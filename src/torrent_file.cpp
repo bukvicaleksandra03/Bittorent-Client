@@ -17,6 +17,7 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
     LOG_I("Info hash: " + crypto::to_hex(info_hash));
 
     // Announce
+    // TODO - BEP 19 - no need for announce field
     if (!metadata_dict->has_key("announce"))
     {
         LOG_E("Missing mandatory 'announce' field");

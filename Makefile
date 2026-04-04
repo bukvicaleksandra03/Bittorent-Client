@@ -19,8 +19,6 @@ LDFLAGS += -L/usr/lib -lgtest -lgtest_main
 INC_DIR = -I/usr/src/gtest/include
 INC_DIR += -Iinc
 
-
-
 SRC_DIR = src
 OBJ_DIR = obj
 TEST_DIR = tests
@@ -28,7 +26,9 @@ TEST_DIR = tests
 # Source files
 SOURCES = $(SRC_DIR)/utils.cpp \
           $(SRC_DIR)/net/socket.cpp \
-          $(SRC_DIR)/net/ssl_socket.cpp
+          $(SRC_DIR)/net/ssl_socket.cpp \
+          $(SRC_DIR)/bencode/bencode_parser.cpp \
+          $(SRC_DIR)/torrent_file.cpp
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 
 # Executable names
@@ -42,7 +42,6 @@ dirs:
 $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INC_DIR) -c $< -o $@
-
 
 # Discover every tests/**/test_*.cpp and derive a binary name from it.
 # tests/net/test_sockets.cpp      -> test_sockets
