@@ -17,3 +17,7 @@ Why it matters:
 Bootstrap problem solved. A brand-new torrent with zero peers can still be downloaded immediately because the web server acts as the initial seed.
 No special server software. Any standard web server (nginx, Apache, S3 bucket) works -- it just needs to support HTTP range requests, which virtually all do.
 Gradual transition. As peers join the swarm, the client shifts load away from the web server to peer-to-peer, reducing server bandwidth costs over time.
+
+
+
+Magnet links. A magnet link is essentially just the info_hash encoded as a URI (magnet:?xt=urn:btih:<info_hash>). The client uses it to find peers via DHT or other means and then downloads the full metadata from those peers.

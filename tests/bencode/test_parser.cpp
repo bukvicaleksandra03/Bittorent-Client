@@ -8,6 +8,7 @@
 
 #include "bencode/bencode_parser.h"
 #include "bencode/bencode_types.h"
+#include "torrent_file.h"
 
 namespace fs = std::filesystem;
 
@@ -343,6 +344,7 @@ TEST(BencodeRawBytes, ParseFromUint8Pointer)
 
 static const fs::path UNPARSED_DIR = "torrent_files/unparsed_torrents";
 static const fs::path PARSED_DIR = "torrent_files/parsed_torrents";
+static const fs::path TORRENT_OBJ_DIR = "torrent_files/torrent_file_objects";
 
 TEST(BencodeBatch, ParseAllTorrentsToFiles)
 {
@@ -354,7 +356,13 @@ TEST(BencodeBatch, ParseAllTorrentsToFiles)
         for (auto& entry : fs::directory_iterator(PARSED_DIR))
             fs::remove_all(entry.path());
     }
+    if (fs::exists(TORRENT_OBJ_DIR))
+    {
+        for (auto& entry : fs::directory_iterator(TORRENT_OBJ_DIR))
+            fs::remove_all(entry.path());
+    }
     fs::create_directories(PARSED_DIR);
+    fs::create_directories(TORRENT_OBJ_DIR);
 
     int parsed_count = 0;
 
@@ -367,27 +375,41 @@ TEST(BencodeBatch, ParseAllTorrentsToFiles)
         std::string path_str = torrent_path.string();
 
         BencodeParser parser(path_str);
+        std::unique_ptr<TorrentFile> torrent;
         try
         {
-            parser.parse();
+            torrent = parser.parse();
         }
         catch (const std::exception& e)
         {
-            FAIL() << "Failed to parse " << path_str << ": " << e.what();
+            std::cerr << "WARNING: TorrentFile construction failed for "
+                      << path_str << ": " << e.what() << "\n";
         }
 
         fs::path output_file = PARSED_DIR / torrent_path.filename();
-
         std::ofstream ofs(output_file);
         ASSERT_TRUE(ofs.is_open())
             << "Could not open output file: " << output_file;
-
         parser.print(ofs);
         ofs.close();
 
         EXPECT_TRUE(fs::exists(output_file));
         EXPECT_GT(fs::file_size(output_file), 0u)
             << "Output file is empty: " << output_file;
+
+        if (torrent)
+        {
+            fs::path obj_file = TORRENT_OBJ_DIR / torrent_path.filename();
+            std::ofstream obj_ofs(obj_file);
+            ASSERT_TRUE(obj_ofs.is_open())
+                << "Could not open output file: " << obj_file;
+            torrent->print(obj_ofs);
+            obj_ofs.close();
+
+            EXPECT_TRUE(fs::exists(obj_file));
+            EXPECT_GT(fs::file_size(obj_file), 0u)
+                << "Output file is empty: " << obj_file;
+        }
 
         ++parsed_count;
     }

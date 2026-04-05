@@ -25,9 +25,8 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
             "The torrent file provided doesn't contain the mandatory announce "
             "field.");
     }
-    announce = metadata_dict->get_val<BString>("announce")->content;
-    LOG_D("Tracker: " + announce);
-    extract_tracker_information(announce);
+    std::string announce = metadata_dict->get_val<BString>("announce")->content;
+    announce_tracker = extract_tracker_information(announce);
 
     // Announce list
     if (metadata_dict->has_key("announce-list"))
@@ -37,7 +36,14 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
         {
             std::vector<std::string> vec;
             vec = load_list_of_bstrings(as<BList>(list_ptr.get()));
-            announce_list.push_back(vec);
+
+            std::vector<TrackerDetails> td_list;
+            for (const auto& v : vec)
+            {
+                TrackerDetails td = extract_tracker_information(v);
+                td_list.push_back(td);
+            }
+            announce_list_trackers.push_back(td_list);
         }
     }
 
@@ -50,7 +56,6 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
             "directory.");
     }
     BDict* info_dict = metadata_dict->get_val<BDict>("info");
-    LOG_D("Info dictionary loaded");
 
     // Torrent name
     torrent_name = info_dict->get_val<BString>("name")->content;
@@ -165,7 +170,6 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
 
 void TorrentFile::print(std::ostream& os)
 {
-    os << "Announce: " << announce << std::endl;
     os << "Torrent name: " << torrent_name << std::endl;
     os << "Total size: " << total_size << std::endl;
     os << "Piece size: " << piece_size << std::endl;
@@ -173,11 +177,27 @@ void TorrentFile::print(std::ostream& os)
     os << "Info hash: " << crypto::to_hex(info_hash) << std::endl;
     os << "Is private: " << (is_private ? "yes" : "no") << std::endl;
     os << "Is multifile: " << (is_multifile ? "yes" : "no") << std::endl;
-    os << "Tracker hostname: " << tracker_hostname << std::endl;
-    os << "Tracker port: " << tracker_port << std::endl;
-    os << "Tracker protocol: " << static_cast<int>(tracker_protocol)
-       << std::endl;
-    os << "Tracker path: " << tracker_path << std::endl;
+    os << "Tracker (" << announce_tracker.to_string() << "):" << std::endl;
+    os << "     Hostname: " << announce_tracker.hostname << std::endl;
+    os << "     Port: " << announce_tracker.port << std::endl;
+    os << "     Protocol: " << announce_tracker.protocol.scheme << std::endl;
+    os << "     Path: " << announce_tracker.path << std::endl;
+    if (!announce_list_trackers.empty())
+    {
+        os << "Announce list:" << std::endl;
+        for (size_t tier = 0; tier < announce_list_trackers.size(); ++tier)
+        {
+            os << "  Tier " << tier + 1 << ": [";
+            const auto& trackers = announce_list_trackers[tier];
+            for (size_t i = 0; i < trackers.size(); ++i)
+            {
+                os << "\"" << trackers[i].to_string() << "\"";
+                if (i + 1 < trackers.size())
+                    os << ", ";
+            }
+            os << "]" << std::endl;
+        }
+    }
     if (is_multifile)
     {
         os << "Number of files: " << files.size() << std::endl;
@@ -190,57 +210,39 @@ void TorrentFile::print(std::ostream& os)
     }
 }
 
-void TorrentFile::extract_tracker_information(const std::string& announce)
+TorrentFile::TrackerDetails TorrentFile::extract_tracker_information(
+    const std::string& announce)
 {
-    // Extract hostname from announce URL
-    // e.g., "https://torrent.ubuntu.com/announce" -> "torrent.ubuntu.com"
-    // Also extract port if it is present
-    // e.g., "https://torrent.ubuntu.com:8080/announce" -> "8080"
-    // e.g., "https://torrent.ubuntu.com/announce" -> "/announce"
-    // if no path is present, use default path "/"
+    TrackerDetails td;
+
     size_t start = announce.find("://");
-    if (start != std::string::npos)
-    {
-        std::string proto = announce.substr(0, start);
-        if (proto == "udp")
-        {
-            tracker_protocol = TrackerProtocol::UDP;
-        }
-        else if (proto == "https")
-        {
-            tracker_protocol = TrackerProtocol::HTTPS;
-        }
-        else if (proto == "http")
-        {
-            tracker_protocol = TrackerProtocol::HTTP;
-        }
-        else
-        {
-            throw std::runtime_error("Unknown tracker protocol: " + proto);
-        }
-    }
-    else
-    {
+    if (start == std::string::npos)
         throw std::runtime_error("Invalid announce URL: " + announce);
-    }
+
+    td.protocol = TrackerProtocol::from_scheme(announce.substr(0, start));
+
     start += 3;  // Skip "://"
     size_t end = announce.find('/', start);
     if (end == std::string::npos)
-    {
         end = announce.length();
-    }
-    tracker_hostname = announce.substr(start, end - start);
-    tracker_path = announce.substr(end);
-    if (tracker_path.empty())
-    {
-        tracker_path = "/";
-    }
-    size_t colon = tracker_hostname.find(':');
+
+    td.hostname = announce.substr(start, end - start);
+    td.path = announce.substr(end);
+    if (td.path.empty())
+        td.path = "/";
+
+    size_t colon = td.hostname.find(':');
     if (colon != std::string::npos)
     {
-        tracker_port = std::stoi(tracker_hostname.substr(colon + 1));
-        tracker_hostname = tracker_hostname.substr(0, colon);
+        td.port = std::stoi(td.hostname.substr(colon + 1));
+        td.hostname = td.hostname.substr(0, colon);
     }
+    else
+    {
+        td.port = td.protocol.default_port;
+    }
+
+    return td;
 }
 
 std::vector<std::string> TorrentFile::load_list_of_bstrings(BList* list)

@@ -1,0 +1,15 @@
+Torrent name: ubuntu-25.10-desktop-amd64.iso
+Total size: 5702520832
+Piece size: 262144
+Piece count: 21754
+Info hash: c8295ce630f2064f08440db1534e4992cfe4862a
+Is private: no
+Is multifile: no
+Tracker (https://torrent.ubuntu.com:443/announce):
+     Hostname: torrent.ubuntu.com
+     Port: 443
+     Protocol: https
+     Path: /announce
+Announce list:
+  Tier 1: ["https://torrent.ubuntu.com:443/announce"]
+  Tier 2: ["https://ipv6.torrent.ubuntu.com:443/announce"]

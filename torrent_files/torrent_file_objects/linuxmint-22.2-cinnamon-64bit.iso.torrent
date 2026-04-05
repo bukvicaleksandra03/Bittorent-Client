@@ -1,0 +1,12 @@
+Torrent name: linuxmint-22.2-cinnamon-64bit.iso
+Total size: 3055239168
+Piece size: 2097152
+Piece count: 1457
+Info hash: 4a984ee35f1f09e95e50c224ab70b775a43e8e06
+Is private: no
+Is multifile: no
+Tracker (udp://tracker.opentrackr.org:1337/announce):
+     Hostname: tracker.opentrackr.org
+     Port: 1337
+     Protocol: udp
+     Path: /announce

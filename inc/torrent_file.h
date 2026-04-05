@@ -6,25 +6,29 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <vector>
 
 #include "bencode/bencode_types.h"
 #include "crypto.h"
-#include "tracker_protocol.h"
+#include "trackers/tracker_details.h"
 namespace fs = std::filesystem;
 
 class TorrentFile
 {
    public:
-    // Constructor takes metadata dict and raw info bytes for hash calculation
+    // Builds a TorrentFile from the parsed bencoded dictionary.
+    // info_dict_raw_bytes is the exact byte sequence of the bencoded "info"
+    // value, needed to compute info_hash (SHA-1 must hash the raw bytes,
+    // not a re-encoded representation).
     TorrentFile(std::shared_ptr<BDict> metadata_dict,
                 const std::vector<uint8_t>& info_dict_raw_bytes);
 
     void print(std::ostream& os);
 
     // Getters
-    const std::string& get_announce() const
+    std::string get_announce() const
     {
-        return announce;
+        return announce_tracker.to_string();
     }
     const std::string& get_name() const
     {
@@ -55,55 +59,54 @@ class TorrentFile
         return crypto::to_hex(info_hash);
     }
 
-    const std::string& get_tracker_hostname() const
+    TrackerDetails get_tracker() const
     {
-        return tracker_hostname;
-    }
-    uint16_t get_tracker_port() const
-    {
-        return tracker_port;
-    }
-    const std::string& get_tracker_path() const
-    {
-        return tracker_path;
-    }
-    TrackerProtocol get_tracker_protocol() const
-    {
-        return tracker_protocol;
+        return announce_tracker;
     }
 
    private:
+    // Represents a single file within the torrent
     struct File
     {
-        std::string crc32;
-        uint64_t length;
-        std::string md5;
-        std::string mtime;
-        fs::path path;
-        std::string sha1;
+        // Mandatory
+        uint64_t length;  // File size in bytes (mandatory)
+        fs::path path;    // Relative path where the file should be saved
+
+        // Optional
+        std::string mtime;  // Last-modification Unix timestamp
+        std::string sha1;   // SHA-1 hash for per-file integrity
+
+        // Practically useless because SHA1 already detects everything CRC-32
+        // and MD5 detect (accidental corruption, truncation, bit flips). SHA-1
+        // is strictly stronger than both -- larger output space (160 bits vs 32
+        // or 128) and better collision resistance. Internet archive still adds
+        // them for legacy/compatibility reasons.
+        std::string crc32;  // CRC-32 checksum
+        std::string md5;    // Optional MD5 hash for per-file integrity (BEP 3)
     };
 
-    std::string announce;
-    std::vector<std::vector<std::string>> announce_list;
-    std::string torrent_name;
+    std::string torrent_name;  // Suggested name for the file or root directory
 
-    bool is_multifile;
+    bool is_multifile;  // True if torrent contains multiple files
 
-    uint64_t total_size;
-    uint64_t piece_size;
-    std::vector<File> files;
-    bool is_private = false;
+    uint64_t total_size;      // Total size of all files combined, in bytes
+    uint64_t piece_size;      // Size of each piece (except possibly the last)
+    std::vector<File> files;  // List of files in the torrent
+    bool is_private =
+        false;  // If true, clients must only use trackers (no DHT/PEX)
 
-    std::vector<std::array<uint8_t, 20>> pieces;
+    // SHA-1 of the raw bencoded info dict (torrent identity)
     crypto::SHA1Hash info_hash;
+    std::vector<std::array<uint8_t, 20>> pieces;  // SHA-1 hash for each piece
 
-    // Tracker information
-    std::string tracker_hostname;
-    uint16_t tracker_port;
-    std::string tracker_path;
-    TrackerProtocol tracker_protocol;
+    // created when details from "announce" are extracted
+    TrackerDetails announce_tracker;
+    // created when details from "announce list" are extracted
+    std::vector<std::vector<TrackerDetails>> announce_list_trackers;
 
-    void extract_tracker_information(const std::string& announce);
+    // Parses the announce URL into hostname, port, path, and protocol
+    TrackerDetails extract_tracker_information(const std::string& announce);
 
+    // Utility: extracts a BList of BStrings into a vector of std::string
     std::vector<std::string> load_list_of_bstrings(BList* list);
 };

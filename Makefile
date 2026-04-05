@@ -24,8 +24,7 @@ OBJ_DIR = obj
 TEST_DIR = tests
 
 # Source files
-SOURCES = $(SRC_DIR)/utils.cpp \
-          $(SRC_DIR)/net/socket.cpp \
+SOURCES = $(SRC_DIR)/net/socket.cpp \
           $(SRC_DIR)/net/ssl_socket.cpp \
           $(SRC_DIR)/bencode/bencode_parser.cpp \
           $(SRC_DIR)/torrent_file.cpp
