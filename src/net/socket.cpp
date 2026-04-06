@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -33,15 +34,24 @@ std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
 
     LOG_D("DNS lookup for " + hostname + ":" + port + " with socket type " +
           socket_type_to_string(socket_type) + ".");
+
+    auto t0 = std::chrono::steady_clock::now();
     int status = getaddrinfo(hostname.c_str(), port.c_str(), &hints, &res);
+    auto t1 = std::chrono::steady_clock::now();
+
+    auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
     if (status != 0)
     {
-        throw std::runtime_error("getaddrinfo() failed");
+        LOG_E("DNS lookup for " + hostname + ":" + port + " failed after " +
+              std::to_string(elapsed_ms) + " ms: " + gai_strerror(status));
+        throw std::runtime_error("getaddrinfo() failed for " + hostname +
+                                 ":" + port + ": " + gai_strerror(status));
     }
 
     std::vector<std::unique_ptr<Address>> addresses;
 
-    // Loop through the results
     for (p = res; p != nullptr; p = p->ai_next)
     {
         if (p->ai_family == AF_INET)
@@ -59,6 +69,10 @@ std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
     }
 
     freeaddrinfo(res);
+
+    LOG_I("DNS lookup for " + hostname + ":" + port + " resolved " +
+          std::to_string(addresses.size()) + " address(es) in " +
+          std::to_string(elapsed_ms) + " ms");
 
     return addresses;
 }
