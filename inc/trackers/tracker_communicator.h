@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "crypto.h"
@@ -16,16 +17,8 @@ class TrackerCommunicator
                                        const utils::PeerId& my_peer_id,
                                        uint64_t downloaded,
                                        uint64_t left,
-                                       uint64_t uploaded) = 0;
-};
+                                       uint64_t uploaded,
+                                       uint32_t event,
+                                       uint16_t port) = 0;
 
-inline std::unique_ptr<TrackerCommunicator> create_communicator(
-    const TrackerProtocol& protocol)
-{
-    if (protocol == TrackerProtocol::UDP)
-        return std::make_unique<UDPTrackerCommunicator>();
-    if (protocol == TrackerProtocol::HTTP || protocol == TrackerProtocol::HTTPS)
-        return std::make_unique<HTTPTrackerCommunicator>();
-    throw std::runtime_error("Unknown tracker protocol: " +
-                             std::string(protocol.scheme));
-}
+};

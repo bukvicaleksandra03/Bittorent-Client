@@ -144,6 +144,8 @@ class UDPSocket
 
     ~UDPSocket();
 
+    int get_fd() const;
+
     static constexpr size_t MAX_UDP_PAYLOAD = 65507;
 
     std::pair<std::string, std::unique_ptr<Address>> recvfrom();

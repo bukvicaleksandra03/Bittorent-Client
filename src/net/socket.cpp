@@ -401,6 +401,11 @@ UDPSocket::~UDPSocket()
     }
 }
 
+int UDPSocket::get_fd() const
+{
+    return s_sockfd;
+}
+
 UDPSocket::UDPSocket(UDPSocket&& other) noexcept
     : s_sockfd(other.s_sockfd), s_domain(other.s_domain)
 {

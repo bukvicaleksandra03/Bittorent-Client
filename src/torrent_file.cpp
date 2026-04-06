@@ -210,7 +210,7 @@ void TorrentFile::print(std::ostream& os)
     }
 }
 
-TorrentFile::TrackerDetails TorrentFile::extract_tracker_information(
+TrackerDetails TorrentFile::extract_tracker_information(
     const std::string& announce)
 {
     TrackerDetails td;

@@ -27,7 +27,8 @@ TEST_DIR = tests
 SOURCES = $(SRC_DIR)/net/socket.cpp \
           $(SRC_DIR)/net/ssl_socket.cpp \
           $(SRC_DIR)/bencode/bencode_parser.cpp \
-          $(SRC_DIR)/torrent_file.cpp
+          $(SRC_DIR)/torrent_file.cpp \
+          $(SRC_DIR)/trackers/udp_tracker_communicator.cpp
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 
 # Executable names
