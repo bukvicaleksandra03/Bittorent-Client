@@ -21,3 +21,7 @@ Gradual transition. As peers join the swarm, the client shifts load away from th
 
 
 Magnet links. A magnet link is essentially just the info_hash encoded as a URI (magnet:?xt=urn:btih:<info_hash>). The client uses it to find peers via DHT or other means and then downloads the full metadata from those peers.
+
+
+
+

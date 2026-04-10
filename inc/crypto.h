@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "logger.h"
+
 namespace crypto
 {
 
@@ -28,26 +30,26 @@ inline SHA1Hash sha1(const std::vector<uint8_t>& data)
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
     if (!ctx)
     {
-        throw std::runtime_error("Failed to create EVP_MD_CTX");
+        LOG_AND_THROW("Failed to create EVP_MD_CTX");
     }
 
     if (EVP_DigestInit_ex(ctx, EVP_sha1(), nullptr) != 1)
     {
         EVP_MD_CTX_free(ctx);
-        throw std::runtime_error("EVP_DigestInit_ex failed");
+        LOG_AND_THROW("EVP_DigestInit_ex failed");
     }
 
     if (EVP_DigestUpdate(ctx, data.data(), data.size()) != 1)
     {
         EVP_MD_CTX_free(ctx);
-        throw std::runtime_error("EVP_DigestUpdate failed");
+        LOG_AND_THROW("EVP_DigestUpdate failed");
     }
 
     unsigned int len = 0;
     if (EVP_DigestFinal_ex(ctx, hash.data(), &len) != 1)
     {
         EVP_MD_CTX_free(ctx);
-        throw std::runtime_error("EVP_DigestFinal_ex failed");
+        LOG_AND_THROW("EVP_DigestFinal_ex failed");
     }
 
     EVP_MD_CTX_free(ctx);

@@ -90,14 +90,14 @@ static HttpResponse parse_http_response(const std::string& raw)
     size_t header_end = raw.find("\r\n\r\n");
     if (header_end == std::string::npos)
     {
-        throw std::runtime_error("Malformed HTTP response: no header/body separator");
+        LOG_AND_THROW("Malformed HTTP response: no header/body separator");
     }
 
     std::string status_line = raw.substr(0, raw.find("\r\n"));
     size_t space1 = status_line.find(' ');
     if (space1 == std::string::npos)
     {
-        throw std::runtime_error("Malformed HTTP status line");
+        LOG_AND_THROW("Malformed HTTP status line");
     }
     size_t space2 = status_line.find(' ', space1 + 1);
     if (space2 == std::string::npos)
@@ -123,7 +123,7 @@ static std::vector<Peer> parse_tracker_response(const std::string& body)
     if (dict->has_key("failure reason"))
     {
         std::string reason = dict->get_val<BString>("failure reason")->content;
-        throw std::runtime_error("Tracker returned failure: " + reason);
+        LOG_AND_THROW("Tracker returned failure: " + reason);
     }
 
     if (dict->has_key("interval"))
@@ -166,7 +166,7 @@ static std::vector<Peer> parse_tracker_response(const std::string& body)
     }
     else
     {
-        throw std::runtime_error("Unexpected type for 'peers' field");
+        LOG_AND_THROW("Unexpected type for 'peers' field");
     }
 
     return peers;
@@ -196,7 +196,7 @@ std::vector<Peer> HTTPTrackerCommunicator::announce(
 
     if (addresses.empty())
     {
-        throw std::runtime_error("DNS lookup failed for " + tracker.hostname);
+        LOG_AND_THROW("DNS lookup failed for " + tracker.hostname);
     }
 
     constexpr int CONNECT_TIMEOUT_MS = 10000;
@@ -253,6 +253,6 @@ std::vector<Peer> HTTPTrackerCommunicator::announce(
         }
     }
 
-    throw std::runtime_error("HTTP announce failed: exhausted all addresses for " +
-                             tracker.hostname);
+    LOG_AND_THROW("HTTP announce failed: exhausted all addresses for " +
+                  tracker.hostname);
 }

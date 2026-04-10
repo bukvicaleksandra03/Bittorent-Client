@@ -1,11 +1,11 @@
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <utility>
 #include <vector>
 
 #include "bencode/bencode_types.h"
@@ -46,6 +46,10 @@ class TorrentFile
     {
         return pieces.size();
     }
+    bool is_multi_file() const
+    {
+        return is_multifile;
+    }
     const crypto::SHA1Hash& get_info_hash() const
     {
         return info_hash;
@@ -62,6 +66,26 @@ class TorrentFile
     TrackerDetails get_tracker() const
     {
         return announce_tracker;
+    }
+
+    // Returns the logical output file layout as (relative_path, length) pairs.
+    // For single-file torrents this contains exactly one entry.
+    std::vector<std::pair<fs::path, uint64_t>> file_layout() const
+    {
+        std::vector<std::pair<fs::path, uint64_t>> layout;
+        if (is_multifile)
+        {
+            layout.reserve(files.size());
+            for (const auto& f : files)
+            {
+                layout.emplace_back(f.path, f.length);
+            }
+        }
+        else
+        {
+            layout.emplace_back(fs::path(torrent_name), total_size);
+        }
+        return layout;
     }
 
    private:

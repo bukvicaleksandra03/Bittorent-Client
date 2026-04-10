@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "logger.h"
+
 // Type trait mapping
 template <typename T>
 struct BTypeToEnum;
@@ -100,10 +102,9 @@ struct BDict : public BType
     {
         auto it = content.find(key);
         if (it == content.end())
-            throw std::runtime_error(
-                "The dictionary doesn't contain the key: " + key);
+            LOG_AND_THROW("The dictionary doesn't contain the key: " + key);
         if (it->second->type() != BTypeToEnum<T>::value)
-            throw std::runtime_error("Wrong type of the value for key: " + key);
+            LOG_AND_THROW("Wrong type of the value for key: " + key);
         return dynamic_cast<T*>(it->second.get());
     }
 
@@ -126,10 +127,10 @@ template <typename T>
 T* as(BType* obj)
 {
     if (!obj)
-        throw std::runtime_error("Null pointer encountered");
+        LOG_AND_THROW("Null pointer encountered");
     if (obj->type() != BTypeToEnum<T>::value)
     {
-        throw std::runtime_error("Unexpected BType");
+        LOG_AND_THROW("Unexpected BType");
     }
     return dynamic_cast<T*>(obj);
 };

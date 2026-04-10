@@ -29,7 +29,12 @@ SOURCES = $(SRC_DIR)/net/socket.cpp \
           $(SRC_DIR)/bencode/bencode_parser.cpp \
           $(SRC_DIR)/torrent_file.cpp \
           $(SRC_DIR)/trackers/udp_tracker_communicator.cpp \
-          $(SRC_DIR)/trackers/http_tracker_communicator.cpp
+          $(SRC_DIR)/trackers/http_tracker_communicator.cpp \
+          $(SRC_DIR)/peer_wire/peer_message.cpp \
+          $(SRC_DIR)/peer_wire/disk_writer.cpp \
+          $(SRC_DIR)/peer_wire/piece_manager.cpp \
+          $(SRC_DIR)/peer_wire/peer_connection.cpp \
+          $(SRC_DIR)/peer_wire/torrent_manager.cpp
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 
 # Executable names

@@ -5,6 +5,8 @@
 #include <string>
 #include <string_view>
 
+#include "logger.h"
+
 struct TrackerProtocol
 {
     std::string_view scheme;
@@ -31,8 +33,7 @@ struct TrackerProtocol
             return HTTPS;
         if (s == "udp")
             return UDP;
-        throw std::runtime_error(
-            "Unknown tracker protocol: " + std::string(s));
+        LOG_AND_THROW("Unknown tracker protocol: " + std::string(s));
     }
 };
 

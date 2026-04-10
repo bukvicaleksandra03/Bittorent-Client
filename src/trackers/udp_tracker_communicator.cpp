@@ -2,7 +2,6 @@
 
 #include <poll.h>
 
-#include <stdexcept>
 #include <string>
 
 #include "byte_order.h"
@@ -34,7 +33,7 @@ std::vector<Peer> UDPTrackerCommunicator::announce(
 {
     if (tracker.protocol != TrackerProtocol::UDP)
     {
-        throw std::runtime_error(
+        LOG_AND_THROW(
             "UDPTrackerCommunicator used with non-UDP tracker: " +
             tracker.to_string());
     }
@@ -45,7 +44,7 @@ std::vector<Peer> UDPTrackerCommunicator::announce(
         tracker.hostname, std::to_string(tracker.port), SOCK_DGRAM);
     if (addresses.empty())
     {
-        throw std::runtime_error(
+        LOG_AND_THROW(
             "DNS lookup returned no results for " + tracker.hostname);
     }
 
@@ -72,7 +71,7 @@ std::vector<Peer> UDPTrackerCommunicator::announce(
         }
     }
 
-    throw std::runtime_error(
+    LOG_AND_THROW(
         "UDP announce failed on all resolved addresses for " +
         tracker.hostname + ": " + last_error);
 }
@@ -123,7 +122,7 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         if (action == 3)
         {
             std::string err_msg(data.begin() + 8, data.end());
-            throw std::runtime_error("Tracker error (connect): " + err_msg);
+            LOG_AND_THROW("Tracker error (connect): " + err_msg);
         }
 
         if (data.size() < 16)
@@ -137,7 +136,7 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         }
         if (conn_resp.action != 0)
         {
-            throw std::runtime_error(
+            LOG_AND_THROW(
                 "Unexpected action in connect response: " +
                 std::to_string(conn_resp.action));
         }
@@ -148,7 +147,7 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
 
     if (!connected)
     {
-        throw std::runtime_error(
+        LOG_AND_THROW(
             "UDP tracker connect timed out after all retransmissions");
     }
 
@@ -193,7 +192,7 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         if (action == 3)
         {
             std::string err_msg(data.begin() + 8, data.end());
-            throw std::runtime_error("Tracker error (announce): " + err_msg);
+            LOG_AND_THROW("Tracker error (announce): " + err_msg);
         }
 
         if (data.size() < 20)
@@ -207,7 +206,7 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         }
         if (ann_resp.action != 1)
         {
-            throw std::runtime_error(
+            LOG_AND_THROW(
                 "Unexpected action in announce response: " +
                 std::to_string(ann_resp.action));
         }
@@ -220,6 +219,6 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         return ann_resp.peers;
     }
 
-    throw std::runtime_error(
+    LOG_AND_THROW(
         "UDP tracker announce timed out after all retransmissions");
 }

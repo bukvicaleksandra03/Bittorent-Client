@@ -9,6 +9,7 @@
 
 #include "byte_order.h"
 #include "crypto.h"
+#include "logger.h"
 #include "net/socket_addresses.h"
 #include "trackers/tracker_communicator.h"
 #include "utils.h"
@@ -67,7 +68,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
         static ConnectionResp deserialize(const uint8_t* data, size_t len)
         {
             if (len < 16)
-                throw std::runtime_error("Connection response too short");
+                LOG_AND_THROW("Connection response too short");
             ConnectionResp r;
             r.action = byte_order::read_be32(data);
             r.transaction_id = byte_order::read_be32(data + 4);
@@ -171,7 +172,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
                                         bool is_ipv6)
         {
             if (len < 20)
-                throw std::runtime_error("Announce response too short");
+                LOG_AND_THROW("Announce response too short");
 
             AnnounceResp r;
             r.action = byte_order::read_be32(data);
