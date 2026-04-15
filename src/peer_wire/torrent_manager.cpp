@@ -15,7 +15,8 @@ TorrentManager::TorrentManager(std::unique_ptr<TorrentFile> torrent,
       m_piece_manager(static_cast<uint32_t>(m_torrent->get_piece_count()),
                       static_cast<uint32_t>(m_torrent->get_piece_size()),
                       m_torrent->get_total_size(),
-                      m_torrent->get_piece_hashes())
+                      m_torrent->get_piece_hashes(),
+                      m_disk_writer)
 {
     if (!m_torrent)
     {
@@ -38,10 +39,14 @@ void TorrentManager::start()
     announce(TrackerEvent::Started);
 
     const auto peers =
-        m_tracker->announce(m_torrent->get_tracker(), m_torrent->get_info_hash(),
-                            m_peer_id, downloaded_bytes(),
-                            m_torrent->get_total_size() - downloaded_bytes(), 0,
-                            static_cast<uint32_t>(TrackerEvent::None), m_port);
+        m_tracker->announce(m_torrent->get_tracker(),
+                            m_torrent->get_info_hash(),
+                            m_peer_id,
+                            downloaded_bytes(),
+                            m_torrent->get_total_size() - downloaded_bytes(),
+                            0,
+                            static_cast<uint32_t>(TrackerEvent::None),
+                            m_port);
 
     if (peers.empty())
     {
@@ -60,18 +65,20 @@ void TorrentManager::start()
             peers[i], m_torrent->get_info_hash(), m_peer_id, m_piece_manager));
         PeerConnection* conn = m_connections.back().get();
 
-        m_threads.emplace_back([conn, i]() {
-            try
+        m_threads.emplace_back(
+            [conn, i]()
             {
-                conn->connect();
-                conn->run();
-            }
-            catch (const std::exception& e)
-            {
-                LOG_W("Peer worker " + std::to_string(i) +
-                      " terminated with error: " + std::string(e.what()));
-            }
-        });
+                try
+                {
+                    conn->connect();
+                    conn->run();
+                }
+                catch (const std::exception& e)
+                {
+                    LOG_W("Peer worker " + std::to_string(i) +
+                          " terminated with error: " + std::string(e.what()));
+                }
+            });
     }
 }
 
@@ -108,22 +115,7 @@ bool TorrentManager::is_complete() const
 
 double TorrentManager::progress() const
 {
-    const uint32_t total = m_piece_manager.num_pieces();
-    if (total == 0)
-    {
-        return 0.0;
-    }
-
-    uint32_t done = 0;
-    for (uint32_t i = 0; i < total; ++i)
-    {
-        if (m_piece_manager.have_piece(i))
-        {
-            ++done;
-        }
-    }
-
-    return static_cast<double>(done) / static_cast<double>(total);
+    return m_piece_manager.percentage_complete();
 }
 
 void TorrentManager::announce(TrackerEvent event)
@@ -139,14 +131,19 @@ void TorrentManager::announce(TrackerEvent event)
 
     try
     {
-        (void)m_tracker->announce(m_torrent->get_tracker(), m_torrent->get_info_hash(),
-                                  m_peer_id, downloaded, left, 0,
-                                  static_cast<uint32_t>(event), m_port);
+        (void)m_tracker->announce(m_torrent->get_tracker(),
+                                  m_torrent->get_info_hash(),
+                                  m_peer_id,
+                                  downloaded,
+                                  left,
+                                  0,
+                                  static_cast<uint32_t>(event),
+                                  m_port);
     }
     catch (const std::exception& e)
     {
-        LOG_W("Tracker announce failed (" + std::to_string(static_cast<uint32_t>(event)) +
-              "): " + e.what());
+        LOG_W("Tracker announce failed (" +
+              std::to_string(static_cast<uint32_t>(event)) + "): " + e.what());
     }
 }
 

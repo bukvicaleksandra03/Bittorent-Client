@@ -4,7 +4,8 @@
 #include <fstream>
 #include <string>
 
-DiskWriter::DiskWriter(const TorrentFile& torrent, const std::string& output_dir)
+DiskWriter::DiskWriter(const TorrentFile& torrent,
+                       const std::string& output_dir)
     : m_output_dir(output_dir),
       m_piece_size(torrent.get_piece_size()),
       m_total_size(torrent.get_total_size())
@@ -67,7 +68,8 @@ void DiskWriter::preallocate_files()
         out.write(&zero, 1);
         if (!out)
         {
-            LOG_AND_THROW("Failed to preallocate output file: " + path.string());
+            LOG_AND_THROW("Failed to preallocate output file: " +
+                          path.string());
         }
     }
 }
@@ -79,9 +81,10 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
     const uint32_t expected_len = piece_length(index);
     if (data.size() != expected_len)
     {
-        LOG_AND_THROW("Piece write size mismatch: index=" + std::to_string(index) +
-                      ", expected=" + std::to_string(expected_len) +
-                      ", got=" + std::to_string(data.size()));
+        LOG_AND_THROW(
+            "Piece write size mismatch: index=" + std::to_string(index) +
+            ", expected=" + std::to_string(expected_len) +
+            ", got=" + std::to_string(data.size()));
     }
 
     uint64_t write_offset = piece_global_offset(index);
@@ -95,17 +98,22 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
             break;
         }
 
+        // Skip files that are entirely before the current write position
         if (write_offset >= file.offset + file.length)
         {
             continue;
         }
+
+        // Stop the loop early if the next file starts after all remaining bytes
         if (write_offset + remaining <= file.offset)
         {
             break;
         }
 
+        // How far into the file the write begins
         const uint64_t start_in_file =
             (write_offset > file.offset) ? (write_offset - file.offset) : 0;
+
         const uint64_t writable_in_file = file.length - start_in_file;
         const uint64_t chunk = std::min<uint64_t>(remaining, writable_in_file);
 
@@ -113,7 +121,8 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
         std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
         if (!io)
         {
-            LOG_AND_THROW("Failed to open output file for writing: " + path.string());
+            LOG_AND_THROW("Failed to open output file for writing: " +
+                          path.string());
         }
 
         io.seekp(static_cast<std::streamoff>(start_in_file));
@@ -121,7 +130,8 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
                  static_cast<std::streamsize>(chunk));
         if (!io)
         {
-            LOG_AND_THROW("Failed writing piece data to file: " + path.string());
+            LOG_AND_THROW("Failed writing piece data to file: " +
+                          path.string());
         }
 
         remaining -= chunk;
@@ -173,7 +183,8 @@ std::vector<uint8_t> DiskWriter::read_piece(uint32_t index)
         std::ifstream in(path, std::ios::binary);
         if (!in)
         {
-            LOG_AND_THROW("Failed to open output file for reading: " + path.string());
+            LOG_AND_THROW("Failed to open output file for reading: " +
+                          path.string());
         }
 
         in.seekg(static_cast<std::streamoff>(start_in_file));
@@ -181,7 +192,8 @@ std::vector<uint8_t> DiskWriter::read_piece(uint32_t index)
                 static_cast<std::streamsize>(chunk));
         if (in.gcount() != static_cast<std::streamsize>(chunk))
         {
-            LOG_AND_THROW("Failed reading piece data from file: " + path.string());
+            LOG_AND_THROW("Failed reading piece data from file: " +
+                          path.string());
         }
 
         remaining -= chunk;

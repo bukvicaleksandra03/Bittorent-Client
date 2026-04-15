@@ -5,18 +5,22 @@
 #include <string>
 
 #include "logger.h"
+#include "peer_wire/disk_writer.h"
 
 PieceManager::PieceManager(uint32_t num_pieces,
                            uint32_t piece_length,
                            uint64_t total_length,
-                           std::vector<crypto::SHA1Hash> piece_hashes)
-    : m_num_pieces(num_pieces),
+                           std::vector<crypto::SHA1Hash> piece_hashes,
+                           DiskWriter& disk_writer)
+    : m_total_length(total_length),
+      m_curr_downloaded(0),
+      m_num_pieces(num_pieces),
       m_nominal_piece_length(piece_length),
-      m_total_length(total_length),
       m_piece_hashes(std::move(piece_hashes)),
       m_have(num_pieces, false),
       m_in_progress(num_pieces, false),
-      m_buffers(num_pieces)
+      m_buffers(num_pieces),
+      m_disk_writer(disk_writer)
 {
     if (m_piece_hashes.size() != num_pieces)
     {
@@ -128,8 +132,10 @@ bool PieceManager::receive_block(uint32_t piece_index,
     if (verify_piece(piece_index))
     {
         // verification passed
+        m_disk_writer.write_piece(piece_index, buf.data);
         m_have[piece_index] = true;
         m_in_progress[piece_index] = false;
+        m_curr_downloaded += piece_length(piece_index);
         buf = {};
         return true;
     }

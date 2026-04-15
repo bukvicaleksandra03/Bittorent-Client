@@ -1,5 +1,7 @@
 #include "torrent_file.h"
 
+#include <algorithm>
+
 #include "logger.h"
 #include "utils.h"
 

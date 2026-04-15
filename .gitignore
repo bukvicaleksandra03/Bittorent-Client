@@ -4,8 +4,9 @@ bittorrent_client
 parser_test
 
 # Output directories
-parsed_bencode/
-parsed_torrents/
+torrent_files/downloaded
+torrent_files/parsed_torrents
+torrent_files/torrent_file_objects
 
 # Debug
 *.dSYM/
