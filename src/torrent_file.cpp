@@ -173,7 +173,8 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
 void TorrentFile::print(std::ostream& os)
 {
     os << "Torrent name: " << torrent_name << std::endl;
-    os << "Total size: " << total_size << std::endl;
+    os << "Total size: " << total_size << " bytes ("
+       << utils::format_byte_size(total_size) << ")" << std::endl;
     os << "Piece size: " << piece_size << std::endl;
     os << "Piece count: " << pieces.size() << std::endl;
     os << "Info hash: " << crypto::to_hex(info_hash) << std::endl;
@@ -206,7 +207,8 @@ void TorrentFile::print(std::ostream& os)
         os << "Files:" << std::endl;
         for (const auto& file : files)
         {
-            os << "  " << file.path.string() << " (" << file.length << " bytes)"
+            os << "  " << file.path.string() << " (" << file.length
+               << " bytes, " << utils::format_byte_size(file.length) << ")"
                << std::endl;
         }
     }

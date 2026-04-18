@@ -160,3 +160,8 @@ uint64_t TorrentManager::downloaded_bytes() const
     }
     return downloaded;
 }
+
+const std::string& TorrentManager::torrent_name() const
+{
+    return m_torrent->get_name();
+}

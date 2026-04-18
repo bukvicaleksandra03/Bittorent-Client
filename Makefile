@@ -21,6 +21,7 @@ INC_DIR += -Iinc
 
 SRC_DIR = src
 OBJ_DIR = obj
+OUT_DIR = out
 TEST_DIR = tests
 
 # Source files
@@ -34,40 +35,44 @@ SOURCES = $(SRC_DIR)/net/socket.cpp \
           $(SRC_DIR)/peer_wire/disk_writer.cpp \
           $(SRC_DIR)/peer_wire/piece_manager.cpp \
           $(SRC_DIR)/peer_wire/peer_connection.cpp \
-          $(SRC_DIR)/peer_wire/torrent_manager.cpp
+          $(SRC_DIR)/peer_wire/torrent_manager.cpp \
+          $(SRC_DIR)/peer_wire/session_manager.cpp
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 
-# Executable names
-.PHONY: all clean dirs test test_%
+.PHONY: all clean dirs test
 
 all: dirs $(TARGET)
 
 dirs:
-	@mkdir -p $(OBJ_DIR)
+	@mkdir -p $(OBJ_DIR) $(OUT_DIR)
 
 $(OBJ_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INC_DIR) -c $< -o $@
 
-# Discover every tests/**/test_*.cpp and derive a binary name from it.
-# tests/net/test_sockets.cpp      -> test_sockets
-# tests/net/test_ssl_sockets.cpp  -> test_ssl_sockets
+# Discover every tests/**/test_*.cpp and derive a binary path under out/.
+# tests/net/test_sockets.cpp      -> out/test_sockets
+# tests/net/test_ssl_sockets.cpp  -> out/test_ssl_sockets
 TEST_SRCS = $(shell find $(TEST_DIR) -name 'test_*.cpp')
-TEST_BINS = $(patsubst %.cpp,%,$(notdir $(TEST_SRCS)))
+TEST_BINS = $(addprefix $(OUT_DIR)/,$(patsubst %.cpp,%,$(notdir $(TEST_SRCS))))
 
-# Pattern rule: build any test binary from its source + the library objects.
-# The matching source is located with a recursive find so the flat binary
-# name works regardless of subdirectory depth.
-test_%: $(OBJECTS)
+# Build $(OUT_DIR)/test_* from its source + library objects. Source is found
+# by basename so nested paths under tests/ still work.
+$(OUT_DIR)/test_%: $(OBJECTS)
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INC_DIR) $(OBJECTS) \
-		$$(find $(TEST_DIR) -name '$@.cpp') -o $@ $(LDFLAGS)
+		$$(find $(TEST_DIR) -name '$(notdir $@).cpp') -o $@ $(LDFLAGS)
 
-# `make test` builds and runs every test binary.
-test: $(TEST_BINS)
+# Convenience: `make test_foo` builds `out/test_foo` (same stem).
+test_%: $(OUT_DIR)/test_%
+	@true
+
+# `make test` builds and runs every test binary under out/.
+test: dirs $(TEST_BINS)
 	@for bin in $(TEST_BINS); do \
 		echo "========== Running $$bin =========="; \
 		./$$bin || exit 1; \
 	done
 
 clean:
-	rm -rf $(OBJ_DIR) $(TEST_BINS)
+	rm -rf $(OBJ_DIR) $(OUT_DIR) *.log

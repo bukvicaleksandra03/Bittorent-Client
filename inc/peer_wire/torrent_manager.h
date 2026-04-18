@@ -29,6 +29,8 @@ class TorrentManager
     bool is_complete() const;
     double progress() const;
 
+    const std::string& torrent_name() const;
+
    private:
     enum class TrackerEvent : uint32_t
     {

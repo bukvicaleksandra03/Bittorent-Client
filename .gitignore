@@ -1,16 +1,17 @@
 # Build artifacts
 obj/
-bittorrent_client
-parser_test
+
+# Tests output
+out/
 
 # Output directories
 torrent_files/downloaded
+torrent_files/downloaded_using_qbittorent
 torrent_files/parsed_torrents
 torrent_files/torrent_file_objects
 
-# Debug
-*.dSYM/
-core
-
 # Clangd index
 .cache/
+
+# Logs
+*.log

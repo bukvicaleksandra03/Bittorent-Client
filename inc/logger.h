@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -38,6 +39,9 @@ class Logger
         return min_level;
     }
 
+    // When a log file is opened successfully, console output is disabled by
+    // default (logs go to the file only). Call set_console_enabled(true) to
+    // mirror logs to the terminal as well.
     void set_file(const std::string& path)
     {
         if (file_stream.is_open())
@@ -46,6 +50,20 @@ class Logger
         }
         file_stream.open(path, std::ios::app);
         log_to_file = file_stream.is_open();
+        if (log_to_file)
+        {
+            m_console_enabled = false;
+        }
+    }
+
+    void set_console_enabled(bool enabled)
+    {
+        m_console_enabled = enabled;
+    }
+
+    bool console_enabled() const
+    {
+        return m_console_enabled;
     }
 
     void log(Level level,
@@ -55,6 +73,10 @@ class Logger
     {
         if (level < min_level)
             return;
+
+        // Serialize all logging: multiple peer/tracker threads call LOG_* concurrently;
+        // without a lock, file_stream / cout writes interleave and lines merge.
+        std::lock_guard<std::mutex> lock(m_log_mutex);
 
         std::ostringstream oss;
         oss << "[" << timestamp() << "] " << "[" << level_string(level) << "] ";
@@ -68,11 +90,13 @@ class Logger
 
         std::string output = oss.str();
 
-        // Output to console with colors
-        std::ostream& out = (level >= Level::WARNING) ? std::cerr : std::cout;
-        out << color_code(level) << output << "\033[0m" << std::endl;
+        if (m_console_enabled)
+        {
+            std::ostream& out =
+                (level >= Level::WARNING) ? std::cerr : std::cout;
+            out << color_code(level) << output << "\033[0m" << std::endl;
+        }
 
-        // Output to file (no colors)
         if (log_to_file && file_stream.is_open())
         {
             file_stream << output << std::endl;
@@ -80,7 +104,10 @@ class Logger
     }
 
    private:
-    Logger() : min_level(Level::INFO), log_to_file(false) {}
+    Logger()
+        : min_level(Level::INFO), log_to_file(false), m_console_enabled(true)
+    {
+    }
     ~Logger()
     {
         if (file_stream.is_open())
@@ -92,7 +119,9 @@ class Logger
 
     Level min_level;
     bool log_to_file;
+    bool m_console_enabled;
     std::ofstream file_stream;
+    std::mutex m_log_mutex;
 
     static std::string timestamp()
     {
