@@ -27,8 +27,8 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -43,11 +43,17 @@ namespace fs = std::filesystem;
 namespace
 {
 
+// std::string default_torrent_path()
+// {
+//     return "/home/albukvic/Projects/Bittorent-Client/torrent_files/"
+//            "unparsed_torrents/"
+//            "linuxmint-22.2-cinnamon-64bit.iso.torrent";
+// }
+
 std::string default_torrent_path()
 {
     return "/home/albukvic/Projects/Bittorent-Client/torrent_files/"
-           "unparsed_torrents/"
-           "linuxmint-22.2-cinnamon-64bit.iso.torrent";
+           "unparsed_torrents/ubuntu-25.10-desktop-amd64.iso.torrent";
 }
 
 std::string default_reference_dir()

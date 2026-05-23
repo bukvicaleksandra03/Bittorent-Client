@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <memory>
 #include <string>
 
 DiskWriter::DiskWriter(const TorrentFile& torrent,
@@ -40,11 +41,16 @@ DiskWriter::DiskWriter(const TorrentFile& torrent,
                       std::to_string(running_offset) +
                       ", torrent_total=" + std::to_string(m_total_size));
     }
+
+    m_file_mutexes.reserve(m_files.size());
+    for (size_t i = 0; i < m_files.size(); ++i)
+    {
+        m_file_mutexes.emplace_back(std::make_unique<std::mutex>());
+    }
 }
 
 void DiskWriter::preallocate_files()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     std::filesystem::create_directories(m_output_dir);
 
     for (const auto& file : m_files)
@@ -72,11 +78,31 @@ void DiskWriter::preallocate_files()
                           path.string());
         }
     }
+
+    m_files_preallocated.store(true, std::memory_order_release);
+}
+
+void DiskWriter::ensure_preallocated() const
+{
+    if (!m_files_preallocated.load(std::memory_order_acquire))
+    {
+        LOG_AND_THROW(
+            "DiskWriter: read_piece/write_piece called before "
+            "preallocate_files() completed");
+    }
 }
 
 void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    ensure_preallocated();
+    std::vector<size_t> indices = file_indices_for_piece(index);
+    std::sort(indices.begin(), indices.end());
+    std::vector<std::unique_lock<std::mutex>> locks;
+    locks.reserve(indices.size());
+    for (size_t i : indices)
+    {
+        locks.emplace_back(*m_file_mutexes[i]);
+    }
 
     const uint32_t expected_len = piece_length(index);
     if (data.size() != expected_len)
@@ -149,7 +175,15 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
 
 std::vector<uint8_t> DiskWriter::read_piece(uint32_t index)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    ensure_preallocated();
+    std::vector<size_t> indices = file_indices_for_piece(index);
+    std::sort(indices.begin(), indices.end());
+    std::vector<std::unique_lock<std::mutex>> locks;
+    locks.reserve(indices.size());
+    for (size_t i : indices)
+    {
+        locks.emplace_back(*m_file_mutexes[i]);
+    }
 
     const uint32_t len = piece_length(index);
     std::vector<uint8_t> out(len);
@@ -232,4 +266,25 @@ uint64_t DiskWriter::piece_global_offset(uint32_t index) const
 std::filesystem::path DiskWriter::absolute_path(const FileEntry& file) const
 {
     return m_output_dir / file.rel_path;
+}
+
+std::vector<size_t> DiskWriter::file_indices_for_piece(uint32_t index) const
+{
+    const uint64_t beg = piece_global_offset(index);
+    const uint64_t end = beg + piece_length(index);
+    std::vector<size_t> out;
+    out.reserve(2);
+
+    for (size_t i = 0; i < m_files.size(); ++i)
+    {
+        const auto& f = m_files[i];
+        const auto file_start = f.offset;
+        const uint64_t file_end = file_start + f.length;
+        if (end <= file_start || beg >= file_end)
+        {
+            continue;
+        }
+        out.push_back(i);
+    }
+    return out;
 }

@@ -1,9 +1,10 @@
 #include "peer_wire/torrent_manager.h"
 
-#include <algorithm>
 #include <exception>
+#include <utility>
 
 #include "logger.h"
+#include "peer_wire/peer_connection.h"
 #include "trackers/tracker_communicator_factory.h"
 
 TorrentManager::TorrentManager(std::unique_ptr<TorrentFile> torrent,
@@ -38,15 +39,15 @@ void TorrentManager::start()
     m_disk_writer.preallocate_files();
     announce(TrackerEvent::Started);
 
-    const auto peers =
-        m_tracker->announce(m_torrent->get_tracker(),
-                            m_torrent->get_info_hash(),
-                            m_peer_id,
-                            downloaded_bytes(),
-                            m_torrent->get_total_size() - downloaded_bytes(),
-                            0,
-                            static_cast<uint32_t>(TrackerEvent::None),
-                            m_port);
+    std::vector<Peer> peers = m_tracker->announce(
+        m_torrent->get_tracker(),
+        m_torrent->get_info_hash(),
+        m_peer_id,
+        downloaded_bytes(),
+        m_torrent->get_total_size() - downloaded_bytes(),
+        0,
+        static_cast<uint32_t>(TrackerEvent::None),
+        m_port);
 
     if (peers.empty())
     {
@@ -54,32 +55,96 @@ void TorrentManager::start()
         return;
     }
 
-    const size_t max_connections = 30;
-    const size_t to_spawn = std::min(peers.size(), max_connections);
-    m_connections.reserve(to_spawn);
-    m_threads.reserve(to_spawn);
-
-    for (size_t i = 0; i < to_spawn; ++i)
     {
-        m_connections.emplace_back(std::make_unique<PeerConnection>(
-            peers[i], m_torrent->get_info_hash(), m_peer_id, m_piece_manager));
-        PeerConnection* conn = m_connections.back().get();
-
-        m_threads.emplace_back(
-            [conn, i]()
-            {
-                try
-                {
-                    conn->connect();
-                    conn->run();
-                }
-                catch (const std::exception& e)
-                {
-                    LOG_W("Peer worker " + std::to_string(i) +
-                          " terminated with error: " + std::string(e.what()));
-                }
-            });
+        std::lock_guard<std::mutex> lock(m_spawn_mu);
+        m_all_peers = std::move(peers);
+        m_next_peer_index = 0;
+        m_workers_running = 0;
+        spawn_peers_locked();
     }
+}
+
+void TorrentManager::spawn_peers_locked()
+{
+    while (!m_stopped.load(std::memory_order_relaxed) &&
+           m_workers_running < k_max_concurrent_peers &&
+           m_next_peer_index < m_all_peers.size())
+    {
+        if (m_piece_manager.is_complete())
+        {
+            break;
+        }
+
+        const size_t idx = m_next_peer_index++;
+        ++m_workers_running;
+
+        m_threads.emplace_back([this, idx]() { run_peer_worker(idx); });
+    }
+}
+
+void TorrentManager::run_peer_worker(size_t peer_index)
+{
+    m_peer_workers_started.fetch_add(1, std::memory_order_relaxed);
+
+    const Peer& peer = m_all_peers[peer_index];
+
+    try
+    {
+        PeerConnection conn(peer,
+                            m_torrent->get_info_hash(),
+                            m_peer_id,
+                            m_piece_manager);
+
+        try
+        {
+            conn.connect();
+        }
+        catch (const std::exception& e)
+        {
+            m_peer_handshake_failed.fetch_add(1, std::memory_order_relaxed);
+            LOG_W("Peer " + peer.to_string() + " handshake/connect failed: " +
+                  std::string(e.what()));
+            on_peer_worker_finished();
+            return;
+        }
+
+        m_peer_handshakes_ok.fetch_add(1, std::memory_order_relaxed);
+
+        if (m_stopped.load(std::memory_order_relaxed))
+        {
+            on_peer_worker_finished();
+            return;
+        }
+
+        try
+        {
+            conn.run();
+        }
+        catch (const std::exception& e)
+        {
+            m_peer_run_failed.fetch_add(1, std::memory_order_relaxed);
+            LOG_W("Peer " + peer.to_string() + " run failed: " +
+                  std::string(e.what()));
+        }
+    }
+    catch (const std::exception& e)
+    {
+        m_peer_handshake_failed.fetch_add(1, std::memory_order_relaxed);
+        LOG_W("Peer worker " + std::to_string(peer_index) + " failed: " +
+              std::string(e.what()));
+    }
+
+    on_peer_worker_finished();
+}
+
+void TorrentManager::on_peer_worker_finished()
+{
+    std::lock_guard<std::mutex> lock(m_spawn_mu);
+    if (m_workers_running > 0)
+    {
+        --m_workers_running;
+    }
+    spawn_peers_locked();
 }
 
 void TorrentManager::stop()
@@ -99,7 +164,6 @@ void TorrentManager::stop()
 
     if (m_tracker)
     {
-        // If download finished, report completion first, then stopped.
         if (is_complete())
         {
             announce(TrackerEvent::Completed);
@@ -116,6 +180,26 @@ bool TorrentManager::is_complete() const
 double TorrentManager::progress() const
 {
     return m_piece_manager.percentage_complete();
+}
+
+uint64_t TorrentManager::peer_workers_started() const
+{
+    return m_peer_workers_started.load(std::memory_order_relaxed);
+}
+
+uint64_t TorrentManager::peer_handshakes_ok() const
+{
+    return m_peer_handshakes_ok.load(std::memory_order_relaxed);
+}
+
+uint64_t TorrentManager::peer_handshake_failed() const
+{
+    return m_peer_handshake_failed.load(std::memory_order_relaxed);
+}
+
+uint64_t TorrentManager::peer_run_failed() const
+{
+    return m_peer_run_failed.load(std::memory_order_relaxed);
 }
 
 void TorrentManager::announce(TrackerEvent event)
