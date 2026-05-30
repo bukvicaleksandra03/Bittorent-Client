@@ -5,30 +5,23 @@
 //   RUN_SINGLE_TORRENT_TEST=1 ./out/test_single_torrent
 //
 // Optional environment:
-//   TORRENT_PATH           Path to .torrent (default: project path below)
-//   TORRENT_TEST_OUT       Download directory (default:
-//   .../torrent_files/downloaded) TORRENT_REFERENCE_DIR  Reference files from
-//   qBittorrent (default:
-//                          .../torrent_files/downloaded_using_qbittorent)
-//   TORRENT_TEST_LOG       Log file path (default: single_torrent_test.log in
-//   cwd)
-//   TORRENT_LOG_CONSOLE    If set to 1, mirror structured logs to the terminal
-//                          as well as the file (default: file only after
-//                          set_file).
-//   SINGLE_TORRENT_MAX_SEC Stop after N seconds (incomplete ok); 0 = until
-//   done
+//   TORRENT_PATH           Path to .torrent (default:
+//   <project>/torrent_files/unparsed_torrents/...) TORRENT_TEST_OUT Download
+//   directory (default: <project>/torrent_files/downloaded)
+//   TORRENT_REFERENCE_DIR  Reference files from qBittorrent
+//                          (default:
+//                          <project>/torrent_files/downloaded_using_qbittorent)
+//   TORRENT_LOG_DIR        Log directory (default: <project>/logs)
+//   SINGLE_TORRENT_MAX_SEC Stop after N seconds (incomplete ok); 0 = until done
 
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -43,23 +36,26 @@ namespace fs = std::filesystem;
 namespace
 {
 
-// std::string default_torrent_path()
-// {
-//     return "/home/albukvic/Projects/Bittorent-Client/torrent_files/"
-//            "unparsed_torrents/"
-//            "linuxmint-22.2-cinnamon-64bit.iso.torrent";
-// }
+// Resolve the project root at compile time from the location of this source
+// file: tests/peer_wire/test_single_torrent.cpp  ->  ../../  = project root.
+fs::path project_root()
+{
+    // __FILE__ is the absolute path to this source file as seen by the
+    // compiler.
+    return fs::path(__FILE__).parent_path().parent_path().parent_path();
+}
 
 std::string default_torrent_path()
 {
-    return "/home/albukvic/Projects/Bittorent-Client/torrent_files/"
-           "unparsed_torrents/ubuntu-25.10-desktop-amd64.iso.torrent";
+    return (project_root() / "torrent_files" / "unparsed_torrents" /
+            "linuxmint-22.2-cinnamon-64bit.iso.torrent")
+        .string();
 }
 
 std::string default_reference_dir()
 {
-    return "/home/albukvic/Projects/Bittorent-Client/torrent_files/"
-           "downloaded_using_qbittorent";
+    return (project_root() / "torrent_files" / "downloaded_using_qbittorent")
+        .string();
 }
 
 // Byte-for-byte compare (streaming, large-file safe).
@@ -74,7 +70,7 @@ bool files_equal(const fs::path& a, const fs::path& b)
     const auto sb = fs::file_size(b, ec);
     if (ec || sa != sb)
     {
-        LOG_I("File size does not match the expected.");
+        std::cout << "File size does not match the expected.\n";
         return false;
     }
 
@@ -179,21 +175,9 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
     ASSERT_TRUE(fs::exists(torrent_path))
         << "Torrent file not found: " << torrent_path;
 
-    logger::Logger::instance().set_level(logger::Level::DEBUG);
-
-    const char* log_env = std::getenv("TORRENT_TEST_LOG");
-    const std::string log_file =
-        log_env ? std::string(log_env) : "single_torrent_test.log";
-    logger::Logger::instance().set_file(log_file);
-    if (const char* c = std::getenv("TORRENT_LOG_CONSOLE");
-        c != nullptr && std::strcmp(c, "1") == 0)
-    {
-        logger::Logger::instance().set_console_enabled(true);
-    }
-
-    LOG_INFO("Structured log file: " + log_file);
-    std::cout << "Logging to file: " << log_file
-              << " (set TORRENT_LOG_CONSOLE=1 to mirror logs to terminal)\n";
+    // Per-torrent and per-peer log files are created automatically by
+    // TorrentManager under <log_dir>/<name>.log (and peer variants).
+    // The log level can be tuned here by changing the Level argument below.
 
     BencodeParser parser(torrent_path);
     std::unique_ptr<TorrentFile> torrent = parser.parse();
@@ -207,12 +191,17 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
     const char* out_env = std::getenv("TORRENT_TEST_OUT");
     const std::string output_dir =
         out_env ? std::string(out_env)
-                : "/home/albukvic/Projects/Bittorent-Client/torrent_files/"
-                  "downloaded";
+                : (project_root() / "torrent_files" / "downloaded").string();
     fs::create_directories(output_dir);
 
-    LOG_INFO("Output directory: " + output_dir);
-    LOG_INFO("Info hash: " + torrent->get_info_hash_hex());
+    const char* log_env = std::getenv("TORRENT_LOG_DIR");
+    const std::string log_dir =
+        log_env ? std::string(log_env) : (project_root() / "logs").string();
+    fs::create_directories(log_dir);
+
+    std::cout << "Output directory: " << output_dir << "\n";
+    std::cout << "Log directory:    " << log_dir << "\n";
+    std::cout << "Info hash: " << torrent->get_info_hash_hex() << "\n";
 
     int max_sec = 0;
     if (const char* m = std::getenv("SINGLE_TORRENT_MAX_SEC"))
@@ -221,8 +210,8 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
     }
 
     SessionManager sessions;
-    sessions.add(
-        std::make_unique<TorrentManager>(std::move(torrent), output_dir, 6881));
+    sessions.add(std::make_unique<TorrentManager>(
+        std::move(torrent), output_dir, log_dir, logger::Level::DEBUG));
     sessions.start_all();
 
     const auto status_refresh_interval = std::chrono::seconds(5);
@@ -245,9 +234,8 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
             if (elapsed >= max_sec)
             {
                 timed_out = true;
-                LOG_W(
-                    "SINGLE_TORRENT_MAX_SEC reached; stopping workers "
-                    "(download may be incomplete)");
+                std::cout << "SINGLE_TORRENT_MAX_SEC reached; stopping workers "
+                             "(download may be incomplete)\n";
                 break;
             }
         }
@@ -259,8 +247,8 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
 
     if (timed_out)
     {
-        LOG_INFO("Stopped early; data under: " + output_dir);
-        GTEST_SKIP() << "Timed out before completion; see " << log_file;
+        std::cout << "Stopped early; data under: " << output_dir << "\n";
+        GTEST_SKIP() << "Timed out before completion.";
     }
 
     EXPECT_TRUE(sessions.all_complete());
@@ -272,5 +260,6 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
     expect_download_matches_reference(
         output_dir, reference_dir, torrent_name, is_multifile, file_layout);
 
-    LOG_INFO("Download finished and matched reference under " + reference_dir);
+    std::cout << "Download finished and matched reference under "
+              << reference_dir << "\n";
 }

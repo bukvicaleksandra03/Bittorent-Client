@@ -3,7 +3,6 @@
 #include <cstring>
 
 #include "byte_order.h"
-#include "logger.h"
 
 namespace peer_wire
 {
@@ -27,7 +26,7 @@ Handshake Handshake::deserialize(const uint8_t* data, size_t len)
 {
     if (len < HANDSHAKE_LENGTH)
     {
-        LOG_AND_THROW("handshake too short: expected 68 bytes");
+        throw std::runtime_error("handshake too short: expected 68 bytes");
     }
 
     size_t offset = 0;
@@ -35,13 +34,13 @@ Handshake Handshake::deserialize(const uint8_t* data, size_t len)
     const uint8_t pstrlen = data[offset++];
     if (pstrlen != PROTOCOL_STRING_LENGTH)
     {
-        LOG_AND_THROW("unexpected protocol string length");
+        throw std::runtime_error("unexpected protocol string length");
     }
 
     if (std::memcmp(data + offset, PROTOCOL_STRING, PROTOCOL_STRING_LENGTH) !=
         0)
     {
-        LOG_AND_THROW("unexpected protocol string");
+        throw std::runtime_error("unexpected protocol string");
     }
     offset += PROTOCOL_STRING_LENGTH;
 
@@ -76,20 +75,20 @@ PeerMessage PeerMessage::deserialize(const uint8_t* data, size_t len)
 {
     if (len < 4)
     {
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "peer message too short: need at least 4 bytes for length prefix");
     }
 
     const uint32_t length = byte_order::read_be32(data);
     if (length == 0)
     {
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "keep-alive has no message id; handle at connection layer");
     }
 
     if (len < 4 + length)
     {
-        LOG_AND_THROW("peer message truncated");
+        throw std::runtime_error("peer message truncated");
     }
 
     PeerMessage msg{};
@@ -118,11 +117,11 @@ HaveMessage HaveMessage::from_peer_message(const PeerMessage& msg)
 {
     if (msg.id != MessageId::Have)
     {
-        LOG_AND_THROW("expected Have message");
+        throw std::runtime_error("expected Have message");
     }
     if (msg.payload.size() != 4)
     {
-        LOG_AND_THROW("have payload must be exactly 4 bytes");
+        throw std::runtime_error("have payload must be exactly 4 bytes");
     }
 
     return {byte_order::read_be32(msg.payload.data())};
@@ -137,7 +136,7 @@ bool BitfieldMessage::has_piece(uint32_t index) const
 
     if (byte_idx >= bitfield.size())
     {
-        LOG_AND_THROW("bitfield index out of range: index=" +
+        throw std::runtime_error("bitfield index out of range: index=" +
                       std::to_string(index) + ", byte_idx=" +
                       std::to_string(byte_idx) + ", bitfield_size=" +
                       std::to_string(bitfield.size()));
@@ -157,7 +156,7 @@ BitfieldMessage BitfieldMessage::from_peer_message(const PeerMessage& msg)
 {
     if (msg.id != MessageId::Bitfield)
     {
-        LOG_AND_THROW("expected Bitfield message");
+        throw std::runtime_error("expected Bitfield message");
     }
 
     return {msg.payload};
@@ -180,11 +179,11 @@ RequestMessage RequestMessage::from_peer_message(const PeerMessage& msg)
 {
     if (msg.id != MessageId::Request)
     {
-        LOG_AND_THROW("expected Request message");
+        throw std::runtime_error("expected Request message");
     }
     if (msg.payload.size() != 12)
     {
-        LOG_AND_THROW("request payload must be exactly 12 bytes");
+        throw std::runtime_error("request payload must be exactly 12 bytes");
     }
 
     RequestMessage req{};
@@ -214,11 +213,11 @@ PieceMessage PieceMessage::from_peer_message(const PeerMessage& msg)
 {
     if (msg.id != MessageId::Piece)
     {
-        LOG_AND_THROW("expected Piece message");
+        throw std::runtime_error("expected Piece message");
     }
     if (msg.payload.size() < 8)
     {
-        LOG_AND_THROW("piece payload must be at least 8 bytes");
+        throw std::runtime_error("piece payload must be at least 8 bytes");
     }
 
     PieceMessage piece{};
@@ -245,11 +244,11 @@ CancelMessage CancelMessage::from_peer_message(const PeerMessage& msg)
 {
     if (msg.id != MessageId::Cancel)
     {
-        LOG_AND_THROW("expected Cancel message");
+        throw std::runtime_error("expected Cancel message");
     }
     if (msg.payload.size() != 12)
     {
-        LOG_AND_THROW("cancel payload must be exactly 12 bytes");
+        throw std::runtime_error("cancel payload must be exactly 12 bytes");
     }
 
     CancelMessage cancel{};

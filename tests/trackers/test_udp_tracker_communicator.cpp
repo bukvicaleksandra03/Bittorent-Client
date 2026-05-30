@@ -26,7 +26,8 @@ class UDPTrackerTest : public ::testing::Test
    protected:
     void SetUp() override
     {
-        logger::Logger::instance().set_level(logger::Level::DEBUG);
+        auto log = std::make_shared<logger::Logger>();
+        log->set_level(logger::Level::DEBUG);
 
         BencodeParser parser(TORRENT_PATH);
         torrent = parser.parse();
@@ -36,6 +37,7 @@ class UDPTrackerTest : public ::testing::Test
         ASSERT_EQ(tracker.protocol, TrackerProtocol::UDP)
             << "Expected a UDP tracker, got: " << tracker.protocol.scheme;
 
+        communicator = UDPTrackerCommunicator(log);
         peer_id = utils::generate_peer_id();
 
         std::cout << "[  INFO  ] Tracker: " << tracker.to_string() << std::endl;

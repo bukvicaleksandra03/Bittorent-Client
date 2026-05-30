@@ -1,8 +1,8 @@
 #include "torrent_file.h"
 
 #include <algorithm>
+#include <stdexcept>
 
-#include "logger.h"
 #include "utils.h"
 
 TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
@@ -11,19 +11,16 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
     // Calculate info_hash from raw info dictionary bytes
     if (info_bytes.empty())
     {
-        LOG_E("No info dictionary bytes provided for hash calculation");
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "Cannot calculate info_hash: no info bytes provided");
     }
     info_hash = crypto::sha1(info_bytes);
-    LOG_I("Info hash: " + crypto::to_hex(info_hash));
 
     // Announce
     // TODO - BEP 19 - no need for announce field
     if (!metadata_dict->has_key("announce"))
     {
-        LOG_E("Missing mandatory 'announce' field");
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "The torrent file provided doesn't contain the mandatory announce "
             "field.");
     }
@@ -52,8 +49,7 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
     // Load the info dictionary fields
     if (!metadata_dict->has_key("info"))
     {
-        LOG_E("Missing mandatory 'info' dictionary");
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "The torrent file provided doesn't contain the mandatory \"info\" "
             "directory.");
     }
@@ -61,57 +57,40 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
 
     // Torrent name
     torrent_name = info_dict->get_val<BString>("name")->content;
-    if (torrent_name.empty())
-    {
-        LOG_WARNING(
-            "The torrent file provided doesn't contain the mandatory \"name\" "
-            "field.");
-    }
 
     // Load and verify piece length
     piece_size = info_dict->get_val<BInteger>("piece length")->value;
     if (!utils::is_power_of_two(piece_size))
     {
-        LOG_E("Invalid piece length: " + std::to_string(piece_size) +
-              " (not a power of 2)");
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "Piece length of the torrent must be a power of 2.");
     }
 
     if (piece_size < 16 * 1024)
     {
-        LOG_E("Piece length too small: " + std::to_string(piece_size) +
-              " bytes");
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "Piece length must be greater or equal to 16kB.");
     }
-    LOG_D("Piece size: " + std::to_string(piece_size / 1024) + " KB");
 
     if (info_dict->has_key("files"))
         is_multifile = true;
     else
         is_multifile = false;
 
-    LOG_D(is_multifile ? "Multi-file torrent detected"
-                       : "Single-file torrent detected");
-
     if (!is_multifile)
     {
         total_size = info_dict->get_val<BInteger>("length")->value;
-        LOG_D("File size: " + std::to_string(total_size / (1024 * 1024)) +
-              " MB");
     }
 
     if (is_multifile)
     {
         total_size = 0;
         auto file_list = info_dict->get_val<BList>("files")->content;
-        LOG_D("Loading " + std::to_string(file_list.size()) + " files...");
         for (const auto& elem : file_list)
         {
             struct TorrentFile::File f;
             if (elem->type() != BType::Type::Dictionary)
-                LOG_AND_THROW(
+                throw std::runtime_error(
                     "Files entry should be a list of dictionaries.");
             auto file_dict = as<BDict>(elem.get());
 
@@ -136,24 +115,12 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
             }
             files.push_back(f);
         }
-        LOG_D("Total size: " + std::to_string(total_size / (1024 * 1024)) +
-              " MB across " + std::to_string(files.size()) + " files");
     }
 
     // Load pieces string
     const std::string& pieces_str =
         info_dict->get_val<BString>("pieces")->content;
     size_t num_pieces = pieces_str.size() / 20;
-
-    size_t expected_pieces = static_cast<size_t>(
-        std::ceil(static_cast<double>(total_size) / piece_size));
-    if (num_pieces != expected_pieces)
-    {
-        LOG_W("Piece count mismatch: found " + std::to_string(num_pieces) +
-              ", expected " + std::to_string(expected_pieces));
-        LOG_D("  Total size: " + std::to_string(total_size) + " bytes");
-        LOG_D("  Piece size: " + std::to_string(piece_size) + " bytes");
-    }
 
     // Resize the pieces vector to hold all piece hashes
     pieces.resize(num_pieces);
@@ -165,9 +132,6 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
             20,
             pieces[i].begin());
     }
-
-    LOG_I("Loaded torrent: \"" + torrent_name + "\" (" +
-          std::to_string(num_pieces) + " pieces)");
 }
 
 void TorrentFile::print(std::ostream& os)
@@ -221,7 +185,7 @@ TrackerDetails TorrentFile::extract_tracker_information(
 
     size_t start = announce.find("://");
     if (start == std::string::npos)
-        LOG_AND_THROW("Invalid announce URL: " + announce);
+        throw std::runtime_error("Invalid announce URL: " + announce);
 
     td.protocol = TrackerProtocol::from_scheme(announce.substr(0, start));
 

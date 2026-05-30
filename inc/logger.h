@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -24,10 +25,15 @@ enum class Level
 class Logger
 {
    public:
-    static Logger& instance()
+    Logger()
+        : min_level(Level::INFO), log_to_file(false), m_console_enabled(true)
     {
-        static Logger logger;
-        return logger;
+    }
+
+    ~Logger()
+    {
+        if (file_stream.is_open())
+            file_stream.close();
     }
 
     void set_level(Level level)
@@ -39,6 +45,14 @@ class Logger
         return min_level;
     }
 
+    // Optional prefix prepended to every message (e.g. "[ubuntu.iso] " or
+    // "[1.2.3.4:6881] "). Useful to tell per-torrent / per-peer logs apart
+    // when they share a console or are merged for review.
+    void set_prefix(const std::string& prefix)
+    {
+        m_prefix = prefix;
+    }
+
     // When a log file is opened successfully, console output is disabled by
     // default (logs go to the file only). Call set_console_enabled(true) to
     // mirror logs to the terminal as well.
@@ -47,6 +61,12 @@ class Logger
         if (file_stream.is_open())
         {
             file_stream.close();
+        }
+        // Create parent directories so the open never silently fails.
+        std::filesystem::path p(path);
+        if (p.has_parent_path())
+        {
+            std::filesystem::create_directories(p.parent_path());
         }
         file_stream.open(path, std::ios::app);
         log_to_file = file_stream.is_open();
@@ -74,12 +94,17 @@ class Logger
         if (level < min_level)
             return;
 
-        // Serialize all logging: multiple peer/tracker threads call LOG_* concurrently;
-        // without a lock, file_stream / cout writes interleave and lines merge.
+        // Each Logger instance has its own mutex; peer threads writing to
+        // separate Logger objects never contend with each other.
         std::lock_guard<std::mutex> lock(m_log_mutex);
 
         std::ostringstream oss;
         oss << "[" << timestamp() << "] " << "[" << level_string(level) << "] ";
+
+        if (!m_prefix.empty())
+        {
+            oss << m_prefix;
+        }
 
         if (file)
         {
@@ -103,23 +128,46 @@ class Logger
         }
     }
 
-   private:
-    Logger()
-        : min_level(Level::INFO), log_to_file(false), m_console_enabled(true)
+    // ---------------------------------------------------------------------------
+    // Convenience wrappers – avoid repeating the level enum at call sites.
+    // ---------------------------------------------------------------------------
+
+    void debug(const std::string& msg, const char* file = nullptr, int line = 0)
     {
+        log(Level::DEBUG, msg, file, line);
     }
-    ~Logger()
+    void info(const std::string& msg, const char* file = nullptr, int line = 0)
     {
-        if (file_stream.is_open())
-            file_stream.close();
+        log(Level::INFO, msg, file, line);
+    }
+    void warning(const std::string& msg,
+                 const char* file = nullptr,
+                 int line = 0)
+    {
+        log(Level::WARNING, msg, file, line);
+    }
+    void error(const std::string& msg, const char* file = nullptr, int line = 0)
+    {
+        log(Level::ERROR, msg, file, line);
+    }
+
+    // Logs at ERROR level and throws std::runtime_error with the same message.
+    [[noreturn]] void throw_error(const std::string& msg,
+                                  const char* file = nullptr,
+                                  int line = 0)
+    {
+        log(Level::ERROR, msg, file, line);
+        throw std::runtime_error(msg);
     }
 
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
+   private:
     Level min_level;
     bool log_to_file;
     bool m_console_enabled;
+    std::string m_prefix;
     std::ofstream file_stream;
     std::mutex m_log_mutex;
 
@@ -167,32 +215,16 @@ class Logger
     }
 };
 
-// Convenience macros with file/line info
-#define LOG_DEBUG(msg)              \
-    logger::Logger::instance().log( \
-        logger::Level::DEBUG, msg, __FILE__, __LINE__)
-#define LOG_INFO(msg) \
-    logger::Logger::instance().log(logger::Level::INFO, msg, __FILE__, __LINE__)
-#define LOG_WARNING(msg)            \
-    logger::Logger::instance().log( \
-        logger::Level::WARNING, msg, __FILE__, __LINE__)
-#define LOG_ERROR(msg)              \
-    logger::Logger::instance().log( \
-        logger::Level::ERROR, msg, __FILE__, __LINE__)
+// ---------------------------------------------------------------------------
+// Instance-based macros – pass the dereferenced logger as the first argument:
+//   LLOG_INFO(*m_logger, "message")
+//   LLOG_DEBUG(*peer_logger, "received block " + ...)
+// ---------------------------------------------------------------------------
 
-#define LOG_AND_THROW(msg)                                   \
-    do                                                       \
-    {                                                        \
-        auto _msg = (msg);                                   \
-        logger::Logger::instance().log(                      \
-            logger::Level::ERROR, _msg, __FILE__, __LINE__); \
-        throw std::runtime_error(_msg);                      \
-    } while (0)
-
-// Simple macros without file/line (cleaner output)
-#define LOG_D(msg) logger::Logger::instance().log(logger::Level::DEBUG, msg)
-#define LOG_I(msg) logger::Logger::instance().log(logger::Level::INFO, msg)
-#define LOG_W(msg) logger::Logger::instance().log(logger::Level::WARNING, msg)
-#define LOG_E(msg) logger::Logger::instance().log(logger::Level::ERROR, msg)
+#define LLOG_DEBUG(lg, msg) (lg).debug((msg), __FILE__, __LINE__)
+#define LLOG_INFO(lg, msg) (lg).info((msg), __FILE__, __LINE__)
+#define LLOG_WARNING(lg, msg) (lg).warning((msg), __FILE__, __LINE__)
+#define LLOG_ERROR(lg, msg) (lg).error((msg), __FILE__, __LINE__)
+#define LLOG_THROW(lg, msg) (lg).throw_error((msg), __FILE__, __LINE__)
 
 }  // namespace logger

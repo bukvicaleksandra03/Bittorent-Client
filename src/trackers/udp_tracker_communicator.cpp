@@ -2,6 +2,7 @@
 
 #include <poll.h>
 
+#include <stdexcept>
 #include <string>
 
 #include "byte_order.h"
@@ -33,18 +34,21 @@ std::vector<Peer> UDPTrackerCommunicator::announce(
 {
     if (tracker.protocol != TrackerProtocol::UDP)
     {
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "UDPTrackerCommunicator used with non-UDP tracker: " +
             tracker.to_string());
     }
 
-    LOG_I("UDP announce to " + tracker.to_string());
+    logger::Logger* log = m_logger.get();
+
+    if (log)
+        LLOG_INFO(*log, "UDP announce to " + tracker.to_string());
 
     auto addresses = dns_lookup(
         tracker.hostname, std::to_string(tracker.port), SOCK_DGRAM);
     if (addresses.empty())
     {
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "DNS lookup returned no results for " + tracker.hostname);
     }
 
@@ -54,8 +58,9 @@ std::vector<Peer> UDPTrackerCommunicator::announce(
     {
         const char* family =
             addr_ptr->domain() == AF_INET6 ? "IPv6" : "IPv4";
-        LOG_D("Trying " + std::string(family) + " address for " +
-              tracker.hostname);
+        if (log)
+            LLOG_DEBUG(*log, "Trying " + std::string(family) +
+                                 " address for " + tracker.hostname);
 
         try
         {
@@ -66,12 +71,13 @@ std::vector<Peer> UDPTrackerCommunicator::announce(
         catch (const std::exception& e)
         {
             last_error = e.what();
-            LOG_W("Failed on " + std::string(family) + " address: " +
-                  last_error);
+            if (log)
+                LLOG_WARNING(*log, "Failed on " + std::string(family) +
+                                       " address: " + last_error);
         }
     }
 
-    LOG_AND_THROW(
+    throw std::runtime_error(
         "UDP announce failed on all resolved addresses for " +
         tracker.hostname + ": " + last_error);
 }
@@ -89,6 +95,8 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
     bool is_ipv6 = tracker_addr.domain() == AF_INET6;
     UDPClientSocket sock(tracker_addr.domain());
 
+    logger::Logger* log = m_logger.get();
+
     // ---- BEP 15 Connect ------------------------------------------------
 
     ConnectionReq conn_req;
@@ -104,8 +112,10 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
     {
         int timeout_ms = 15000 * (1 << n);
 
-        LOG_D("Connect attempt " + std::to_string(n) +
-              " (timeout " + std::to_string(timeout_ms / 1000) + "s)");
+        if (log)
+            LLOG_DEBUG(*log, "Connect attempt " + std::to_string(n) +
+                                 " (timeout " +
+                                 std::to_string(timeout_ms / 1000) + "s)");
 
         sock.sendto(conn_msg, tracker_addr);
 
@@ -122,7 +132,7 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         if (action == 3)
         {
             std::string err_msg(data.begin() + 8, data.end());
-            LOG_AND_THROW("Tracker error (connect): " + err_msg);
+            throw std::runtime_error("Tracker error (connect): " + err_msg);
         }
 
         if (data.size() < 16)
@@ -131,12 +141,15 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         conn_resp = ConnectionResp::deserialize(raw, data.size());
         if (conn_resp.transaction_id != conn_req.transaction_id)
         {
-            LOG_W("Connect response transaction_id mismatch, ignoring");
+            if (log)
+                LLOG_WARNING(*log,
+                             "Connect response transaction_id mismatch, "
+                             "ignoring");
             continue;
         }
         if (conn_resp.action != 0)
         {
-            LOG_AND_THROW(
+            throw std::runtime_error(
                 "Unexpected action in connect response: " +
                 std::to_string(conn_resp.action));
         }
@@ -147,11 +160,12 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
 
     if (!connected)
     {
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "UDP tracker connect timed out after all retransmissions");
     }
 
-    LOG_D("Connected, connection_id obtained");
+    if (log)
+        LLOG_DEBUG(*log, "Connected, connection_id obtained");
 
     // ---- BEP 15 Announce ------------------------------------------------
 
@@ -174,8 +188,10 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
     {
         int timeout_ms = 15000 * (1 << n);
 
-        LOG_D("Announce attempt " + std::to_string(n) +
-              " (timeout " + std::to_string(timeout_ms / 1000) + "s)");
+        if (log)
+            LLOG_DEBUG(*log, "Announce attempt " + std::to_string(n) +
+                                 " (timeout " +
+                                 std::to_string(timeout_ms / 1000) + "s)");
 
         sock.sendto(ann_msg, tracker_addr);
 
@@ -192,7 +208,7 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         if (action == 3)
         {
             std::string err_msg(data.begin() + 8, data.end());
-            LOG_AND_THROW("Tracker error (announce): " + err_msg);
+            throw std::runtime_error("Tracker error (announce): " + err_msg);
         }
 
         if (data.size() < 20)
@@ -201,24 +217,31 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
         auto ann_resp = AnnounceResp::deserialize(raw, data.size(), is_ipv6);
         if (ann_resp.transaction_id != ann_req.transaction_id)
         {
-            LOG_W("Announce response transaction_id mismatch, ignoring");
+            if (log)
+                LLOG_WARNING(*log,
+                             "Announce response transaction_id mismatch, "
+                             "ignoring");
             continue;
         }
         if (ann_resp.action != 1)
         {
-            LOG_AND_THROW(
+            throw std::runtime_error(
                 "Unexpected action in announce response: " +
                 std::to_string(ann_resp.action));
         }
 
-        LOG_I("Announce OK  seeders=" + std::to_string(ann_resp.seeders) +
-              " leechers=" + std::to_string(ann_resp.leechers) +
-              " interval=" + std::to_string(ann_resp.interval) + "s" +
-              " peers=" + std::to_string(ann_resp.peers.size()));
+        if (log)
+            LLOG_INFO(*log,
+                      "Announce OK  seeders=" +
+                          std::to_string(ann_resp.seeders) +
+                          " leechers=" + std::to_string(ann_resp.leechers) +
+                          " interval=" + std::to_string(ann_resp.interval) +
+                          "s" +
+                          " peers=" + std::to_string(ann_resp.peers.size()));
 
         return ann_resp.peers;
     }
 
-    LOG_AND_THROW(
+    throw std::runtime_error(
         "UDP tracker announce timed out after all retransmissions");
 }

@@ -11,8 +11,6 @@
 #include <stdexcept>
 #include <string>
 
-#include "logger.h"
-
 inline std::string socket_type_to_string(int socket_type)
 {
     switch (socket_type)
@@ -47,7 +45,7 @@ class Address
             case Domain::IPv6:
                 return "IPv6";
             default:
-                LOG_AND_THROW("Unknown domain: " + std::to_string(domain));
+                throw std::runtime_error("Unknown domain: " + std::to_string(domain));
         }
     }
     std::string identifier;
@@ -67,7 +65,7 @@ class UnixAddress : public Address
     {
         addr.sun_family = AF_UNIX;
         if (path.size() >= sizeof(addr.sun_path))
-            LOG_AND_THROW("Unix path too long");
+            throw std::runtime_error("Unix path too long");
         std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
         identifier = path;
     }
@@ -104,7 +102,7 @@ class IPv4Address : public Address
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0)
-            LOG_AND_THROW("Invalid IPv4 address");
+            throw std::runtime_error("Invalid IPv4 address");
         identifier = ip + ":" + std::to_string(port);
     }
 
@@ -152,7 +150,7 @@ class IPv6Address : public Address
         addr.sin6_family = AF_INET6;
         addr.sin6_port = htons(port);
         if (::inet_pton(AF_INET6, ip.c_str(), &addr.sin6_addr) <= 0)
-            LOG_AND_THROW("Invalid IPv6 address");
+            throw std::runtime_error("Invalid IPv6 address");
         identifier = ip + ":" + std::to_string(port);
     }
 

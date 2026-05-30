@@ -41,6 +41,31 @@ inline std::string format_byte_size(uint64_t bytes)
     return with_unit(static_cast<double>(bytes) / tib, "TiB");
 }
 
+// Human-readable transfer rate, e.g. "5.20 MiB/s", "512.00 KiB/s".
+inline std::string format_byte_rate(double bytes_per_sec)
+{
+    if (bytes_per_sec < 0.0)
+        bytes_per_sec = 0.0;
+
+    constexpr double kib = 1024.0;
+    constexpr double mib = kib * 1024.0;
+    constexpr double gib = mib * 1024.0;
+
+    auto with_unit = [](double value, const char* unit) {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(2) << value << ' ' << unit;
+        return oss.str();
+    };
+
+    if (bytes_per_sec < kib)
+        return with_unit(bytes_per_sec, "B/s");
+    if (bytes_per_sec < mib)
+        return with_unit(bytes_per_sec / kib, "KiB/s");
+    if (bytes_per_sec < gib)
+        return with_unit(bytes_per_sec / mib, "MiB/s");
+    return with_unit(bytes_per_sec / gib, "GiB/s");
+}
+
 // ---------------------------------------------------------------------------
 
 inline bool is_power_of_two(uint64_t n)

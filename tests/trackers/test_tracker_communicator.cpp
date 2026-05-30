@@ -42,7 +42,8 @@ class TrackerCommunicatorTest : public ::testing::TestWithParam<std::string>
    protected:
     void SetUp() override
     {
-        logger::Logger::instance().set_level(logger::Level::DEBUG);
+        auto log = std::make_shared<logger::Logger>();
+        log->set_level(logger::Level::DEBUG);
 
         const std::string& path = GetParam();
         BencodeParser parser(path);
@@ -50,7 +51,7 @@ class TrackerCommunicatorTest : public ::testing::TestWithParam<std::string>
         ASSERT_NE(torrent, nullptr) << "Failed to parse: " << path;
 
         tracker = torrent->get_tracker();
-        communicator = create_communicator(tracker.protocol);
+        communicator = create_communicator(tracker.protocol, log);
         peer_id = utils::generate_peer_id();
 
         std::cout << "[  INFO  ] File:      " << path << std::endl;

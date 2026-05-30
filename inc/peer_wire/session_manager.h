@@ -2,10 +2,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <iosfwd>
 #include <memory>
 #include <mutex>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -59,4 +59,10 @@ class SessionManager
     std::atomic<bool> m_status_stop{true};
     std::ostream* m_status_stream{nullptr};
     std::chrono::milliseconds m_status_interval{std::chrono::milliseconds{1000}};
+
+    // Speed tracking — all guarded by m_mutex (mutable so print_status_locked
+    // can update them in a const context).
+    mutable std::vector<uint64_t> m_prev_bytes;
+    mutable std::chrono::steady_clock::time_point m_last_snapshot;
+    mutable std::vector<double> m_speeds_bps;
 };

@@ -3,17 +3,12 @@
 #include <cctype>
 #include <fstream>
 
-#include "logger.h"
-
 BencodeParser::BencodeParser(const std::string& path)
     : metadata_dict(std::make_shared<BDict>()), pos(0)
 {
     std::ifstream file(path, std::ios::binary);
     if (!file)
-    {
-        LOG_E("Cannot open file: " + path);
-        LOG_AND_THROW("Cannot open file: " + path);
-    }
+        throw std::runtime_error("Cannot open file: " + path);
 
     // Read file into vector<uint8_t>
     // Use char iterator, then copy to uint8_t
@@ -42,7 +37,7 @@ std::shared_ptr<BType> BencodeParser::parse_value()
 uint8_t BencodeParser::get()
 {
     if (pos >= metadata.size())
-        LOG_AND_THROW("No more metadata left.");
+        throw std::runtime_error("No more metadata left.");
 
     return metadata[pos++];
 }
@@ -55,7 +50,7 @@ uint8_t BencodeParser::peek() const
 std::unique_ptr<TorrentFile> BencodeParser::parse()
 {
     if (get() != 'd')
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "The content of the .torrent file must be a bencoded dictionary.");
 
     while (peek() != 'e')
@@ -75,7 +70,7 @@ std::unique_ptr<TorrentFile> BencodeParser::parse()
     }
 
     if (get() != 'e')
-        LOG_AND_THROW("Dictionary not properly terminated.");
+        throw std::runtime_error("Dictionary not properly terminated.");
 
     return std::make_unique<TorrentFile>(metadata_dict, info_dict_raw_bytes);
 }
@@ -88,7 +83,7 @@ std::shared_ptr<BString> BencodeParser::parse_byte_string()
         if (metadata[i] == ':')
             break;
         if (!std::isdigit(metadata[i]))
-            LOG_AND_THROW(
+            throw std::runtime_error(
                 "Error parsing the length of the string at position " +
                 std::to_string(i) + '.');
     }
@@ -98,11 +93,11 @@ std::shared_ptr<BString> BencodeParser::parse_byte_string()
     pos = i;
 
     if (get() != ':')
-        LOG_AND_THROW("Missing \":\" at pos " + std::to_string(pos) + '.');
+        throw std::runtime_error("Missing \":\" at pos " + std::to_string(pos) + '.');
 
     auto b = std::make_shared<BString>();
     if (pos + length > metadata.size())
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "String at the end of the file wasn't finished at position " +
             std::to_string(pos) + '.');
 
@@ -128,21 +123,21 @@ std::shared_ptr<BType> BencodeParser::parse_bencoding_type()
     if (std::isdigit(nextChar))
         return parse_byte_string();
 
-    LOG_AND_THROW(
+    throw std::runtime_error(
         "Unable to parse type at position: " + std::to_string(pos) + '.');
 }
 
 std::shared_ptr<BInteger> BencodeParser::parse_integer()
 {
     if (get() != 'i')
-        LOG_AND_THROW("Integer must start with 'i'");
+        throw std::runtime_error("Integer must start with 'i'");
 
     size_t start = pos;
     while (peek() != 'e')
     {
         if (!std::isdigit(peek()) && peek() != '-')
         {
-            LOG_AND_THROW(
+            throw std::runtime_error(
                 "Invalid character in integer at position " +
                 std::to_string(pos));
         }
@@ -160,7 +155,7 @@ std::shared_ptr<BInteger> BencodeParser::parse_integer()
 std::shared_ptr<BList> BencodeParser::parse_list()
 {
     if (get() != 'l')
-        LOG_AND_THROW("List must start with 'l'");
+        throw std::runtime_error("List must start with 'l'");
 
     auto blist = std::make_shared<BList>();
     while (peek() != 'e')
@@ -169,7 +164,7 @@ std::shared_ptr<BList> BencodeParser::parse_list()
     }
 
     if (get() != 'e')
-        LOG_AND_THROW("List not properly terminated.");
+        throw std::runtime_error("List not properly terminated.");
 
     return blist;
 }
@@ -177,7 +172,7 @@ std::shared_ptr<BList> BencodeParser::parse_list()
 std::shared_ptr<BDict> BencodeParser::parse_dictionary()
 {
     if (get() != 'd')
-        LOG_AND_THROW("Dictionary must start with 'd'");
+        throw std::runtime_error("Dictionary must start with 'd'");
 
     auto bdict = std::make_shared<BDict>();
     while (peek() != 'e')
@@ -189,7 +184,7 @@ std::shared_ptr<BDict> BencodeParser::parse_dictionary()
     }
 
     if (get() != 'e')  // consume ending 'e'
-        LOG_AND_THROW("Dictionary not properly terminated.");
+        throw std::runtime_error("Dictionary not properly terminated.");
 
     return bdict;
 }

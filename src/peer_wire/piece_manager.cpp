@@ -1,7 +1,6 @@
 #include "peer_wire/piece_manager.h"
 
-#include <algorithm>
-#include <cstring>
+#include <stdexcept>
 #include <string>
 
 #include "logger.h"
@@ -12,44 +11,59 @@ PieceManager::PieceManager(uint32_t num_pieces,
                            uint64_t total_length,
                            std::vector<crypto::SHA1Hash> piece_hashes,
                            DiskWriter& disk_writer)
-    : m_total_length(total_length),
-      m_curr_downloaded(0),
+    : m_total_length_bytes(total_length),
       m_num_pieces(num_pieces),
       m_nominal_piece_length(piece_length),
       m_piece_hashes(std::move(piece_hashes)),
-      m_have(num_pieces, false),
-      m_in_progress(num_pieces, false),
-      m_buffers(num_pieces),
+      m_have(std::make_unique<std::atomic<bool>[]>(num_pieces)),
+      m_claimed(std::make_unique<std::atomic<bool>[]>(num_pieces)),
       m_disk_writer(disk_writer)
 {
     if (m_piece_hashes.size() != num_pieces)
     {
-        LOG_AND_THROW("piece hash count does not match num_pieces");
+        throw std::runtime_error("piece hash count does not match num_pieces");
     }
+    // make_unique<std::atomic<bool>[]> value-initialises each element to
+    // false (zero-initialisation of the atomic's stored value).
 }
 
+// ---------------------------------------------------------------------------
+// next_needed — fully lock-free
+//
+// Iterates pieces and tries to atomically claim each one via CAS.
+// Multiple peer threads can call this simultaneously; the CAS guarantees
+// exactly one thread wins each piece.
+// ---------------------------------------------------------------------------
 std::optional<uint32_t> PieceManager::next_needed(
     const std::vector<bool>& peer_bitfield)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     for (uint32_t i = 0; i < m_num_pieces; ++i)
     {
-        if (!m_have[i] && !m_in_progress[i] && i < peer_bitfield.size() &&
-            peer_bitfield[i])
+        // Skip pieces the peer doesn't have.
+        if (i >= static_cast<uint32_t>(peer_bitfield.size()) ||
+            !peer_bitfield[i])
         {
-            m_in_progress[i] = true;
+            continue;
+        }
 
-            uint32_t plen = piece_length(i);
-            uint32_t num_blocks = (plen + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        // Skip pieces we already finished.
+        if (m_have[i].load(std::memory_order_acquire))
+        {
+            continue;
+        }
 
-            auto& buf = m_buffers[i];
-            buf.data.resize(plen, 0);
-            buf.blocks_received.assign(num_blocks, false);
-            buf.blocks_done = 0;
-            buf.blocks_total = num_blocks;
-
+        // Try to atomically claim this piece.  Only one thread will succeed
+        // even when many threads race here simultaneously.
+        bool expected = false;
+        if (m_claimed[i].compare_exchange_strong(expected,
+                                                 true,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_relaxed))
+        {
+            // We own piece i.  The caller will allocate the buffer locally.
             return i;
         }
+        // Another thread claimed it; keep searching.
     }
     return std::nullopt;
 }
@@ -61,7 +75,7 @@ uint32_t PieceManager::piece_length(uint32_t index) const
         return m_nominal_piece_length;
     }
     uint64_t remainder =
-        m_total_length -
+        m_total_length_bytes -
         static_cast<uint64_t>(m_nominal_piece_length) * (m_num_pieces - 1);
     return static_cast<uint32_t>(remainder);
 }
@@ -71,108 +85,83 @@ uint32_t PieceManager::num_pieces() const
     return m_num_pieces;
 }
 
-bool PieceManager::receive_block(uint32_t piece_index,
-                                 uint32_t begin,
-                                 const uint8_t* data,
-                                 size_t len)
+// ---------------------------------------------------------------------------
+// complete_piece — called by the owning peer thread
+//
+// The data buffer is fully assembled in the caller's InFlightPiece; this
+// function only does hash verification, disk scheduling, and atomic state
+// updates.
+// ---------------------------------------------------------------------------
+bool PieceManager::complete_piece(uint32_t piece_index,
+                                  const std::vector<uint8_t>& data)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-
     if (piece_index >= m_num_pieces)
     {
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "out-of-range piece index: " + std::to_string(piece_index) +
             ", num_pieces=" + std::to_string(m_num_pieces));
     }
 
-    if (!m_in_progress[piece_index])
+    // SHA-1 verification happens with no shared state touched.
+    crypto::SHA1Hash actual = crypto::sha1(data);
+    if (actual != m_piece_hashes[piece_index])
     {
-        LOG_D("Ignoring stale block for piece " + std::to_string(piece_index) +
-              ": piece is not currently in progress");
+        if (m_logger)
+            LLOG_WARNING(
+                *m_logger,
+                "piece " + std::to_string(piece_index) +
+                    " failed SHA-1 verification; releasing claim for retry");
+
+        // Release the claim so another peer can re-download this piece.
+        m_claimed[piece_index].store(false, std::memory_order_release);
         return false;
     }
 
-    auto& buf = m_buffers[piece_index];
+    // Write to disk before marking the piece as available.
+    m_disk_writer.write_piece(piece_index, data);
 
-    if (begin + len > buf.data.size())
-    {
-        LOG_D("Ignoring out-of-bounds block for piece " +
-              std::to_string(piece_index) + ": begin=" + std::to_string(begin) +
-              ", len=" + std::to_string(len) +
-              ", piece_size=" + std::to_string(buf.data.size()));
-        return false;
-    }
+    // Mark the piece permanently done.  Leave m_claimed[piece_index] = true
+    // so next_needed never tries to re-claim an already-complete piece (even
+    // in the brief window before m_have is visible).
+    m_have[piece_index].store(true, std::memory_order_release);
+    m_curr_downloaded_bytes.fetch_add(piece_length(piece_index),
+                                      std::memory_order_relaxed);
+    m_completed_count.fetch_add(1, std::memory_order_acq_rel);
 
-    uint32_t block_idx = begin / BLOCK_SIZE;
-    if (block_idx >= buf.blocks_received.size() ||
-        buf.blocks_received[block_idx])
-    {
-        LOG_D("Ignoring invalid/duplicate block for piece " +
-              std::to_string(piece_index) +
-              ": block_idx=" + std::to_string(block_idx) +
-              ", blocks_total=" + std::to_string(buf.blocks_received.size()) +
-              ", already_received=" +
-              std::string(block_idx < buf.blocks_received.size() &&
-                                  buf.blocks_received[block_idx]
-                              ? "true"
-                              : "false"));
-        return false;
-    }
-
-    std::memcpy(buf.data.data() + begin, data, len);
-    buf.blocks_received[block_idx] = true;
-    ++buf.blocks_done;
-
-    if (buf.blocks_done < buf.blocks_total)
-    {
-        // still haven't received the full piece yet
-        return false;
-    }
-
-    if (verify_piece(piece_index))
-    {
-        // verification passed
-        m_disk_writer.write_piece(piece_index, buf.data);
-        m_have[piece_index] = true;
-        m_in_progress[piece_index] = false;
-        m_curr_downloaded += piece_length(piece_index);
-        buf = {};
-        return true;
-    }
-
-    // verification failed, the piece downloading can be restarted
-    m_in_progress[piece_index] = false;
-    buf = {};
-    return false;
+    return true;
 }
 
 bool PieceManager::is_complete() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return std::all_of(m_have.begin(), m_have.end(), [](bool v) { return v; });
+    return m_completed_count.load(std::memory_order_acquire) == m_num_pieces;
 }
 
 bool PieceManager::have_piece(uint32_t index) const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     if (index >= m_num_pieces)
         return false;
-    return m_have[index];
+    return m_have[index].load(std::memory_order_acquire);
 }
 
 void PieceManager::abort_piece(uint32_t index)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (index < m_num_pieces && m_in_progress[index])
+    if (index >= m_num_pieces)
     {
-        m_in_progress[index] = false;
-        m_buffers[index] = {};
+        // The index comes from InFlightPiece::piece_index, which is always
+        // assigned by next_needed — this should never be out of range.
+        if (m_logger)
+            LLOG_WARNING(*m_logger,
+                         "abort_piece called with out-of-range index=" +
+                             std::to_string(index) +
+                             ", num_pieces=" + std::to_string(m_num_pieces));
+        return;
     }
-}
 
-bool PieceManager::verify_piece(uint32_t index) const
-{
-    const auto& buf = m_buffers[index];
-    crypto::SHA1Hash actual = crypto::sha1(buf.data);
-    return actual == m_piece_hashes[index];
+    // Only release if the piece isn't already verified.  A peer that
+    // received all blocks and successfully called complete_piece should
+    // never be calling abort_piece, but guard against it anyway.
+    if (!m_have[index].load(std::memory_order_acquire))
+    {
+        m_claimed[index].store(false, std::memory_order_release);
+    }
 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <fstream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 DiskWriter::DiskWriter(const TorrentFile& torrent,
@@ -13,11 +14,11 @@ DiskWriter::DiskWriter(const TorrentFile& torrent,
 {
     if (m_piece_size == 0)
     {
-        LOG_AND_THROW("Invalid torrent piece size: 0");
+        throw std::runtime_error("Invalid torrent piece size: 0");
     }
     if (m_total_size == 0)
     {
-        LOG_AND_THROW("Invalid torrent total size: 0");
+        throw std::runtime_error("Invalid torrent total size: 0");
     }
 
     uint64_t running_offset = 0;
@@ -33,11 +34,11 @@ DiskWriter::DiskWriter(const TorrentFile& torrent,
 
     if (m_files.empty())
     {
-        LOG_AND_THROW("Torrent file layout is empty");
+        throw std::runtime_error("Torrent file layout is empty");
     }
     if (running_offset != m_total_size)
     {
-        LOG_AND_THROW("Torrent file layout size mismatch: layout_total=" +
+        throw std::runtime_error("Torrent file layout size mismatch: layout_total=" +
                       std::to_string(running_offset) +
                       ", torrent_total=" + std::to_string(m_total_size));
     }
@@ -61,7 +62,7 @@ void DiskWriter::preallocate_files()
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         if (!out)
         {
-            LOG_AND_THROW("Failed to create output file: " + path.string());
+            throw std::runtime_error("Failed to create output file: " + path.string());
         }
 
         if (file.length == 0)
@@ -74,7 +75,7 @@ void DiskWriter::preallocate_files()
         out.write(&zero, 1);
         if (!out)
         {
-            LOG_AND_THROW("Failed to preallocate output file: " +
+            throw std::runtime_error("Failed to preallocate output file: " +
                           path.string());
         }
     }
@@ -86,7 +87,7 @@ void DiskWriter::ensure_preallocated() const
 {
     if (!m_files_preallocated.load(std::memory_order_acquire))
     {
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "DiskWriter: read_piece/write_piece called before "
             "preallocate_files() completed");
     }
@@ -95,6 +96,9 @@ void DiskWriter::ensure_preallocated() const
 void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
 {
     ensure_preallocated();
+
+    // Locking all the files which this piece belongs to in ascending order to
+    // avoid deadlock.
     std::vector<size_t> indices = file_indices_for_piece(index);
     std::sort(indices.begin(), indices.end());
     std::vector<std::unique_lock<std::mutex>> locks;
@@ -107,7 +111,7 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
     const uint32_t expected_len = piece_length(index);
     if (data.size() != expected_len)
     {
-        LOG_AND_THROW(
+        throw std::runtime_error(
             "Piece write size mismatch: index=" + std::to_string(index) +
             ", expected=" + std::to_string(expected_len) +
             ", got=" + std::to_string(data.size()));
@@ -147,7 +151,7 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
         std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
         if (!io)
         {
-            LOG_AND_THROW("Failed to open output file for writing: " +
+            throw std::runtime_error("Failed to open output file for writing: " +
                           path.string());
         }
 
@@ -156,7 +160,7 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
                  static_cast<std::streamsize>(chunk));
         if (!io)
         {
-            LOG_AND_THROW("Failed writing piece data to file: " +
+            throw std::runtime_error("Failed writing piece data to file: " +
                           path.string());
         }
 
@@ -167,7 +171,7 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
 
     if (remaining != 0)
     {
-        LOG_AND_THROW("Piece write did not fully map to files: index=" +
+        throw std::runtime_error("Piece write did not fully map to files: index=" +
                       std::to_string(index) +
                       ", remaining=" + std::to_string(remaining));
     }
@@ -176,6 +180,9 @@ void DiskWriter::write_piece(uint32_t index, const std::vector<uint8_t>& data)
 std::vector<uint8_t> DiskWriter::read_piece(uint32_t index)
 {
     ensure_preallocated();
+
+    // Locking all the files which this piece belongs to in ascending order to
+    // avoid deadlock.
     std::vector<size_t> indices = file_indices_for_piece(index);
     std::sort(indices.begin(), indices.end());
     std::vector<std::unique_lock<std::mutex>> locks;
@@ -217,7 +224,7 @@ std::vector<uint8_t> DiskWriter::read_piece(uint32_t index)
         std::ifstream in(path, std::ios::binary);
         if (!in)
         {
-            LOG_AND_THROW("Failed to open output file for reading: " +
+            throw std::runtime_error("Failed to open output file for reading: " +
                           path.string());
         }
 
@@ -226,7 +233,7 @@ std::vector<uint8_t> DiskWriter::read_piece(uint32_t index)
                 static_cast<std::streamsize>(chunk));
         if (in.gcount() != static_cast<std::streamsize>(chunk))
         {
-            LOG_AND_THROW("Failed reading piece data from file: " +
+            throw std::runtime_error("Failed reading piece data from file: " +
                           path.string());
         }
 
@@ -237,7 +244,7 @@ std::vector<uint8_t> DiskWriter::read_piece(uint32_t index)
 
     if (remaining != 0)
     {
-        LOG_AND_THROW("Piece read did not fully map to files: index=" +
+        throw std::runtime_error("Piece read did not fully map to files: index=" +
                       std::to_string(index) +
                       ", remaining=" + std::to_string(remaining));
     }
@@ -250,7 +257,7 @@ uint32_t DiskWriter::piece_length(uint32_t index) const
     const uint64_t begin = piece_global_offset(index);
     if (begin >= m_total_size)
     {
-        LOG_AND_THROW("Piece index out of range for disk I/O: " +
+        throw std::runtime_error("Piece index out of range for disk I/O: " +
                       std::to_string(index));
     }
 

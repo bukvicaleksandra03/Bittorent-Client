@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "logger.h"
+#include <stdexcept>
 
 // Type trait mapping
 template <typename T>
@@ -102,9 +102,9 @@ struct BDict : public BType
     {
         auto it = content.find(key);
         if (it == content.end())
-            LOG_AND_THROW("The dictionary doesn't contain the key: " + key);
+            throw std::runtime_error("The dictionary doesn't contain the key: " + key);
         if (it->second->type() != BTypeToEnum<T>::value)
-            LOG_AND_THROW("Wrong type of the value for key: " + key);
+            throw std::runtime_error("Wrong type of the value for key: " + key);
         return dynamic_cast<T*>(it->second.get());
     }
 
@@ -127,11 +127,9 @@ template <typename T>
 T* as(BType* obj)
 {
     if (!obj)
-        LOG_AND_THROW("Null pointer encountered");
+        throw std::runtime_error("Null pointer encountered");
     if (obj->type() != BTypeToEnum<T>::value)
-    {
-        LOG_AND_THROW("Unexpected BType");
-    }
+        throw std::runtime_error("Unexpected BType");
     return dynamic_cast<T*>(obj);
 };
 

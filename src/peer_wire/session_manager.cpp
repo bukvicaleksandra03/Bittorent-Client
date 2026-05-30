@@ -5,11 +5,13 @@
 #include <thread>
 
 #include "peer_wire/torrent_manager.h"
+#include "utils.h"
 
 namespace
 {
 // Clear screen and move cursor home (ANSI). Works in most modern terminals.
 constexpr const char k_clear_screen[] = "\033[2J\033[H";
+
 }  // namespace
 
 SessionManager::~SessionManager()
@@ -72,19 +74,91 @@ bool SessionManager::all_complete() const
     return !m_sessions.empty();
 }
 
+// Prints one block per session, for example:
+//
+//   ---- sessions (1) ----
+//     ubuntu-22.04-desktop-amd64.iso           0.25%  (13.00 MiB / 5.20 GiB)  5.20 MiB/s  active
+//     ---- top peers ----
+//       192.168.1.1:6881              45.20 MiB
+//       10.0.0.1:51413               32.10 MiB
+//
 void SessionManager::print_status_locked(std::ostream& os) const
 {
-    os << "---- sessions (" << m_sessions.size() << ") ----\n";
-    for (const auto& s : m_sessions)
+    const auto now = std::chrono::steady_clock::now();
+
+    // Grow parallel vectors to match the current number of sessions.
+    m_prev_bytes.resize(m_sessions.size(), 0);
+    m_speeds_bps.resize(m_sessions.size(), 0.0);
+
+    if (m_last_snapshot == std::chrono::steady_clock::time_point{})
     {
+        // First call: seed prev_bytes so the next interval gives a clean delta.
+        for (size_t i = 0; i < m_sessions.size(); ++i)
+        {
+            if (m_sessions[i])
+            {
+                m_prev_bytes[i] = m_sessions[i]->downloaded_bytes();
+            }
+        }
+        m_last_snapshot = now;
+    }
+    else
+    {
+        const double elapsed =
+            std::chrono::duration<double>(now - m_last_snapshot).count();
+
+        if (elapsed > 0.05)  // guard against near-zero division
+        {
+            for (size_t i = 0; i < m_sessions.size(); ++i)
+            {
+                if (!m_sessions[i])
+                {
+                    continue;
+                }
+                const uint64_t curr = m_sessions[i]->downloaded_bytes();
+                const uint64_t delta =
+                    (curr >= m_prev_bytes[i]) ? (curr - m_prev_bytes[i]) : 0;
+                m_speeds_bps[i] = static_cast<double>(delta) / elapsed;
+                m_prev_bytes[i] = curr;
+            }
+            m_last_snapshot = now;
+        }
+    }
+
+    os << "---- sessions (" << m_sessions.size() << ") ----\n";
+    for (size_t i = 0; i < m_sessions.size(); ++i)
+    {
+        const auto& s = m_sessions[i];
         if (!s)
         {
             continue;
         }
-        os << "  " << std::setw(48) << std::left << s->torrent_name().substr(0, 48)
-           << std::fixed << std::setprecision(2) << std::setw(8) << std::right
-           << s->progress() << "%  "
-           << (s->is_complete() ? "done" : "active") << "\n";
+
+        const std::string size_info =
+            "(" + utils::format_byte_size(s->downloaded_bytes()) + " / " +
+            utils::format_byte_size(s->total_bytes()) + ")";
+
+        const double speed = (i < m_speeds_bps.size()) ? m_speeds_bps[i] : 0.0;
+        const std::string speed_str = utils::format_byte_rate(speed);
+
+        os << "  " << std::setw(48) << std::left
+           << s->torrent_name().substr(0, 48) << std::fixed << std::setprecision(2)
+           << std::setw(7) << std::right << s->progress() << "%  "
+           << std::setw(24) << std::left << size_info
+           << "  " << std::setw(14) << std::left << speed_str
+           << "  " << (s->is_complete() ? "done" : "active") << "\n";
+
+        // Print top 10 peers by bytes downloaded.
+        const auto peers = s->top_peers(10);
+        if (!peers.empty())
+        {
+            os << "    ---- top peers ----\n";
+            for (const auto& p : peers)
+            {
+                os << "      " << std::setw(26) << std::left << p.address
+                   << "  " << utils::format_byte_size(p.bytes) << "\n";
+            }
+        }
     }
     os << std::flush;
 }

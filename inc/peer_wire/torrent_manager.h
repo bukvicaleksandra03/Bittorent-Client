@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 
+#include "logger.h"
 #include "peer.h"
 #include "peer_wire/disk_writer.h"
 #include "peer_wire/piece_manager.h"
@@ -15,11 +16,15 @@
 #include "trackers/tracker_communicator.h"
 #include "utils.h"
 
+class PeerConnection;  // forward declaration — avoids a circular include
+
 class TorrentManager
 {
    public:
     TorrentManager(std::unique_ptr<TorrentFile> torrent,
                    const std::string& output_dir,
+                   const std::string& log_output_dir,
+                   logger::Level log_level = logger::Level::DEBUG,
                    uint16_t listen_port = 6881);
 
     // Announces "started", preallocates output files, and spawns peer workers.
@@ -31,6 +36,12 @@ class TorrentManager
     bool is_complete() const;
     double progress() const;
 
+    // Bytes successfully downloaded and verified so far.
+    uint64_t downloaded_bytes() const;
+
+    // Total size of the torrent in bytes.
+    uint64_t total_bytes() const;
+
     const std::string& torrent_name() const;
 
     // Peer pool statistics (each worker tries one tracker peer index once).
@@ -38,6 +49,17 @@ class TorrentManager
     uint64_t peer_handshakes_ok() const;
     uint64_t peer_handshake_failed() const;
     uint64_t peer_run_failed() const;
+
+    // Per-peer download statistics returned by top_peers().
+    struct PeerStat
+    {
+        std::string address;  // "ip:port"
+        uint64_t bytes;       // total payload bytes received from this peer
+    };
+
+    // Snapshot the bytes downloaded from every active peer connection, sort
+    // descending, and return the top `n` entries.  Thread-safe.
+    std::vector<PeerStat> top_peers(size_t n) const;
 
    private:
     enum class TrackerEvent : uint32_t
@@ -49,15 +71,21 @@ class TorrentManager
     };
 
     void announce(TrackerEvent event);
-    uint64_t downloaded_bytes() const;
 
     void run_peer_worker(size_t peer_index);
     void on_peer_worker_finished();
     void spawn_peers_locked();
 
     std::unique_ptr<TorrentFile> m_torrent;
+    std::string m_output_dir;
+    std::string m_log_output_dir;
     utils::PeerId m_peer_id{};
     uint16_t m_port = 6881;
+
+    // Per-torrent logger: writes to <log_output_dir>/<torrent_name>.log.
+    // Per-peer loggers are created in run_peer_worker and passed to each
+    // PeerConnection, so peer threads never share a log mutex.
+    std::shared_ptr<logger::Logger> m_logger;
 
     DiskWriter m_disk_writer;
     PieceManager m_piece_manager;
@@ -68,10 +96,14 @@ class TorrentManager
     std::vector<Peer> m_all_peers;
     size_t m_next_peer_index = 0;
     size_t m_workers_running = 0;
-    static constexpr size_t k_max_concurrent_peers = 30;
+    static constexpr size_t k_max_concurrent_peers = 10;
 
-    std::mutex m_spawn_mu;
+    mutable std::mutex m_spawn_mu;
     std::vector<std::thread> m_threads;
+
+    // Connections that are currently inside PeerConnection::run().
+    // Written under m_spawn_mu; read by stop() before joining threads.
+    std::vector<PeerConnection*> m_active_connections;
 
     std::atomic<uint64_t> m_peer_workers_started{0};
     std::atomic<uint64_t> m_peer_handshakes_ok{0};

@@ -5,7 +5,6 @@
 
 #include <stdexcept>
 
-#include "logger.h"
 #include "net/socket.h"
 
 // Static flag to track if OpenSSL has been initialized
@@ -51,14 +50,14 @@ SSLSocket::SSLSocket(TCPClientSocket&& socket, const std::string& hostname)
     // Allocates and initializes an SSL context using TLS client method.
     _ctx = SSL_CTX_new(TLS_client_method());
     if (!_ctx)
-        LOG_AND_THROW("SSL_CTX_new() failed: " + get_ssl_error());
+        throw std::runtime_error("SSL_CTX_new() failed: " + get_ssl_error());
 
     // Create SSL connection object
     _ssl = SSL_new(_ctx);
     if (!_ssl)
     {
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW("SSL_new() failed: " + get_ssl_error());
+        throw std::runtime_error("SSL_new() failed: " + get_ssl_error());
     }
 
     // Set SNI hostname (required by many servers).
@@ -69,7 +68,7 @@ SSLSocket::SSLSocket(TCPClientSocket&& socket, const std::string& hostname)
     {
         SSL_free(_ssl);
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW("SSL_set_tlsext_host_name() failed");
+        throw std::runtime_error("SSL_set_tlsext_host_name() failed");
     }
 
     // Attach SSL to the socket file descriptor
@@ -77,7 +76,7 @@ SSLSocket::SSLSocket(TCPClientSocket&& socket, const std::string& hostname)
     {
         SSL_free(_ssl);
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW("SSL_set_fd() failed: " + get_ssl_error());
+        throw std::runtime_error("SSL_set_fd() failed: " + get_ssl_error());
     }
 
     // Perform TLS handshake
@@ -101,7 +100,7 @@ SSLSocket::SSLSocket(TCPClientSocket&& socket, const std::string& hostname)
 
         SSL_free(_ssl);
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW(error_msg);
+        throw std::runtime_error(error_msg);
     }
 }
 
@@ -117,7 +116,7 @@ SSLSocket::SSLSocket(TCPAcceptSocket&& socket,
     // TLS handshake.
     _ctx = SSL_CTX_new(TLS_server_method());
     if (!_ctx)
-        LOG_AND_THROW("SSL_CTX_new() failed: " + get_ssl_error());
+        throw std::runtime_error("SSL_CTX_new() failed: " + get_ssl_error());
 
     // Load the server's certificate from a PEM file.
     // The certificate is what the server presents to the client during the
@@ -126,7 +125,7 @@ SSLSocket::SSLSocket(TCPAcceptSocket&& socket,
             _ctx, cert_file.c_str(), SSL_FILETYPE_PEM) <= 0)
     {
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW("SSL_CTX_use_certificate_file() failed: " +
+        throw std::runtime_error("SSL_CTX_use_certificate_file() failed: " +
                       get_ssl_error());
     }
 
@@ -137,7 +136,7 @@ SSLSocket::SSLSocket(TCPAcceptSocket&& socket,
         0)
     {
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW("SSL_CTX_use_PrivateKey_file() failed: " +
+        throw std::runtime_error("SSL_CTX_use_PrivateKey_file() failed: " +
                       get_ssl_error());
     }
 
@@ -147,7 +146,7 @@ SSLSocket::SSLSocket(TCPAcceptSocket&& socket,
     if (!SSL_CTX_check_private_key(_ctx))
     {
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW("Private key does not match certificate: " +
+        throw std::runtime_error("Private key does not match certificate: " +
                       get_ssl_error());
     }
 
@@ -156,7 +155,7 @@ SSLSocket::SSLSocket(TCPAcceptSocket&& socket,
     if (!_ssl)
     {
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW("SSL_new() failed: " + get_ssl_error());
+        throw std::runtime_error("SSL_new() failed: " + get_ssl_error());
     }
 
     // Bind the SSL object to the accepted socket's file descriptor
@@ -164,7 +163,7 @@ SSLSocket::SSLSocket(TCPAcceptSocket&& socket,
     {
         SSL_free(_ssl);
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW("SSL_set_fd() failed: " + get_ssl_error());
+        throw std::runtime_error("SSL_set_fd() failed: " + get_ssl_error());
     }
 
     // Perform the server side of the TLS handshake.
@@ -192,7 +191,7 @@ SSLSocket::SSLSocket(TCPAcceptSocket&& socket,
 
         SSL_free(_ssl);
         SSL_CTX_free(_ctx);
-        LOG_AND_THROW(error_msg);
+        throw std::runtime_error(error_msg);
     }
 }
 
@@ -257,7 +256,7 @@ void SSLSocket::send(const char* buffer, size_t size)
         }
         int err = SSL_get_error(_ssl, ret);
 
-        LOG_AND_THROW("SSL_write() failed: error code " +
+        throw std::runtime_error("SSL_write() failed: error code " +
                       std::to_string(err) + " - " + get_ssl_error());
     }
 }
@@ -286,7 +285,7 @@ ssize_t SSLSocket::recv(void* buffer, size_t size)
         return 0;
     }
 
-    LOG_AND_THROW("SSL_read() failed: error code " + std::to_string(err) +
+    throw std::runtime_error("SSL_read() failed: error code " + std::to_string(err) +
                   " - " + get_ssl_error());
 }
 
@@ -315,10 +314,10 @@ static void poll_or_throw(int fd,
 
     int ret = poll(&pfd, 1, timeout_ms);
     if (ret < 0)
-        LOG_AND_THROW(std::string(op_name) + " poll() failed: " +
+        throw std::runtime_error(std::string(op_name) + " poll() failed: " +
                       strerror(errno));
     if (ret == 0)
-        LOG_AND_THROW(std::string(op_name) + " timed out after " +
+        throw std::runtime_error(std::string(op_name) + " timed out after " +
                       std::to_string(timeout_ms) + "ms");
 }
 
@@ -330,10 +329,10 @@ void SSLSocket::send_with_timeout(const char* buffer,
     // Set non-blocking for the duration of this call
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0)
-        LOG_AND_THROW("fcntl(F_GETFL) failed: " +
+        throw std::runtime_error("fcntl(F_GETFL) failed: " +
                       std::string(strerror(errno)));
     if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-        LOG_AND_THROW("fcntl(F_SETFL) failed: " +
+        throw std::runtime_error("fcntl(F_SETFL) failed: " +
                       std::string(strerror(errno)));
     size_t total_written = 0;
     while (total_written < size)
@@ -359,7 +358,7 @@ void SSLSocket::send_with_timeout(const char* buffer,
         }
         // Restore blocking before throwing
         fcntl(fd, F_SETFL, flags);
-        LOG_AND_THROW("SSL_write() failed: error code " +
+        throw std::runtime_error("SSL_write() failed: error code " +
                       std::to_string(err) + " - " + get_ssl_error());
     }
     // Restore blocking mode
@@ -372,10 +371,10 @@ ssize_t SSLSocket::recv_with_timeout(void* buffer, size_t size, int timeout_ms)
 
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0)
-        LOG_AND_THROW("fcntl(F_GETFL) failed: " +
+        throw std::runtime_error("fcntl(F_GETFL) failed: " +
                       std::string(strerror(errno)));
     if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-        LOG_AND_THROW("fcntl(F_SETFL) failed: " +
+        throw std::runtime_error("fcntl(F_SETFL) failed: " +
                       std::string(strerror(errno)));
 
     while (true)
@@ -413,7 +412,7 @@ ssize_t SSLSocket::recv_with_timeout(void* buffer, size_t size, int timeout_ms)
         }
 
         fcntl(fd, F_SETFL, flags);
-        LOG_AND_THROW("SSL_read() failed: error code " + std::to_string(err) +
+        throw std::runtime_error("SSL_read() failed: error code " + std::to_string(err) +
                       " - " + get_ssl_error());
     }
 }

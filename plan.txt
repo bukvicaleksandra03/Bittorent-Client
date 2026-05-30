@@ -1,0 +1,7 @@
+
+Today:
+- Add seeding capability. + Print who we are seeding to and how many bytes per second.
+
+31. may:
+- Use DHT to discover peers.
+

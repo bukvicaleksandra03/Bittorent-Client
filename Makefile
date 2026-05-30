@@ -23,6 +23,7 @@ SRC_DIR = src
 OBJ_DIR = obj
 OUT_DIR = out
 TEST_DIR = tests
+LOG_DIR = logs
 
 # Source files
 SOURCES = $(SRC_DIR)/net/socket.cpp \
@@ -75,4 +76,4 @@ test: dirs $(TEST_BINS)
 	done
 
 clean:
-	rm -rf $(OBJ_DIR) $(OUT_DIR) *.log
+	rm -rf $(OBJ_DIR) $(OUT_DIR) $(LOG_DIR)

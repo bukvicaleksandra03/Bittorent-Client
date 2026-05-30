@@ -1,6 +1,7 @@
 #include "trackers/http_tracker_communicator.h"
 
 #include <sstream>
+#include <stdexcept>
 
 #include "bencode/bencode_parser.h"
 #include "crypto.h"
@@ -90,14 +91,15 @@ static HttpResponse parse_http_response(const std::string& raw)
     size_t header_end = raw.find("\r\n\r\n");
     if (header_end == std::string::npos)
     {
-        LOG_AND_THROW("Malformed HTTP response: no header/body separator");
+        throw std::runtime_error(
+            "Malformed HTTP response: no header/body separator");
     }
 
     std::string status_line = raw.substr(0, raw.find("\r\n"));
     size_t space1 = status_line.find(' ');
     if (space1 == std::string::npos)
     {
-        LOG_AND_THROW("Malformed HTTP status line");
+        throw std::runtime_error("Malformed HTTP status line");
     }
     size_t space2 = status_line.find(' ', space1 + 1);
     if (space2 == std::string::npos)
@@ -112,7 +114,8 @@ static HttpResponse parse_http_response(const std::string& raw)
     return resp;
 }
 
-static std::vector<Peer> parse_tracker_response(const std::string& body)
+static std::vector<Peer> parse_tracker_response(
+    const std::string& body, logger::Logger* log)
 {
     BencodeParser parser(reinterpret_cast<const uint8_t*>(body.data()),
                          body.size());
@@ -123,20 +126,23 @@ static std::vector<Peer> parse_tracker_response(const std::string& body)
     if (dict->has_key("failure reason"))
     {
         std::string reason = dict->get_val<BString>("failure reason")->content;
-        LOG_AND_THROW("Tracker returned failure: " + reason);
+        throw std::runtime_error("Tracker returned failure: " + reason);
     }
 
     if (dict->has_key("interval"))
     {
         int64_t interval = dict->get_val<BInteger>("interval")->value;
-        LOG_I("Tracker interval: " + std::to_string(interval) + "s");
+        if (log)
+            LLOG_INFO(*log, "Tracker interval: " + std::to_string(interval) +
+                                "s");
     }
 
     std::vector<Peer> peers;
 
     if (!dict->has_key("peers"))
     {
-        LOG_W("Tracker response has no 'peers' key");
+        if (log)
+            LLOG_WARNING(*log, "Tracker response has no 'peers' key");
         return peers;
     }
 
@@ -146,8 +152,9 @@ static std::vector<Peer> parse_tracker_response(const std::string& body)
     {
         const std::string& compact = as<BString>(peers_val)->content;
         peers = parse_compact_peers(compact);
-        LOG_I("Parsed " + std::to_string(peers.size()) +
-              " peers from compact format");
+        if (log)
+            LLOG_INFO(*log, "Parsed " + std::to_string(peers.size()) +
+                                " peers from compact format");
     }
     else if (peers_val->type() == BType::Type::List)
     {
@@ -161,12 +168,13 @@ static std::vector<Peer> parse_tracker_response(const std::string& body)
                 static_cast<uint16_t>(pd->get_val<BInteger>("port")->value);
             peers.push_back(p);
         }
-        LOG_I("Parsed " + std::to_string(peers.size()) +
-              " peers from dictionary format");
+        if (log)
+            LLOG_INFO(*log, "Parsed " + std::to_string(peers.size()) +
+                                " peers from dictionary format");
     }
     else
     {
-        LOG_AND_THROW("Unexpected type for 'peers' field");
+        throw std::runtime_error("Unexpected type for 'peers' field");
     }
 
     return peers;
@@ -188,15 +196,20 @@ std::vector<Peer> HTTPTrackerCommunicator::announce(
                                            left, uploaded, event, port);
     std::string request = build_http_request(tracker, query);
 
-    LOG_I("HTTP announce to " + tracker.to_string());
-    LOG_D("Request:\n" + request);
+    logger::Logger* log = m_logger.get();
+
+    if (log)
+    {
+        LLOG_INFO(*log, "HTTP announce to " + tracker.to_string());
+        LLOG_DEBUG(*log, "Request:\n" + request);
+    }
 
     auto addresses = dns_lookup(tracker.hostname,
                                 std::to_string(tracker.port), SOCK_STREAM);
 
     if (addresses.empty())
     {
-        LOG_AND_THROW("DNS lookup failed for " + tracker.hostname);
+        throw std::runtime_error("DNS lookup failed for " + tracker.hostname);
     }
 
     constexpr int CONNECT_TIMEOUT_MS = 10000;
@@ -206,7 +219,8 @@ std::vector<Peer> HTTPTrackerCommunicator::announce(
     {
         try
         {
-            LOG_D("Trying address: " + addr->identifier);
+            if (log)
+                LLOG_DEBUG(*log, "Trying address: " + addr->identifier);
 
             int domain = (addr->domain() == AF_INET6) ? AF_INET6 : AF_INET;
             TCPClientSocket tcp_sock(domain);
@@ -228,31 +242,40 @@ std::vector<Peer> HTTPTrackerCommunicator::announce(
 
             if (raw_response.empty())
             {
-                LOG_W("Empty response from tracker");
+                if (log)
+                    LLOG_WARNING(*log, "Empty response from tracker");
                 continue;
             }
 
-            LOG_D("Received " + std::to_string(raw_response.size()) +
-                  " bytes from tracker");
+            if (log)
+                LLOG_DEBUG(*log,
+                           "Received " +
+                               std::to_string(raw_response.size()) +
+                               " bytes from tracker");
 
             HttpResponse http_resp = parse_http_response(raw_response);
 
             if (http_resp.status_code != 200)
             {
-                LOG_W("Tracker returned HTTP " +
-                      std::to_string(http_resp.status_code));
+                if (log)
+                    LLOG_WARNING(*log,
+                                 "Tracker returned HTTP " +
+                                     std::to_string(http_resp.status_code));
                 continue;
             }
 
-            return parse_tracker_response(http_resp.body);
+            return parse_tracker_response(http_resp.body, log);
         }
         catch (const std::exception& e)
         {
-            LOG_W("Failed on address " + addr->identifier + ": " + e.what());
+            if (log)
+                LLOG_WARNING(*log, "Failed on address " + addr->identifier +
+                                       ": " + e.what());
             continue;
         }
     }
 
-    LOG_AND_THROW("HTTP announce failed: exhausted all addresses for " +
-                  tracker.hostname);
+    throw std::runtime_error(
+        "HTTP announce failed: exhausted all addresses for " +
+        tracker.hostname);
 }
