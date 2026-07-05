@@ -49,6 +49,20 @@ class PeerConnection
         return m_bytes_downloaded.load(std::memory_order_relaxed);
     }
 
+    // Total payload bytes served to this peer since the connection opened.
+    // Updated atomically; safe to read from other threads without a lock.
+    uint64_t bytes_uploaded() const
+    {
+        return m_bytes_uploaded.load(std::memory_order_relaxed);
+    }
+
+    // Number of blocks (Piece messages) served to this peer since the
+    // connection opened.  Updated atomically.
+    uint64_t blocks_uploaded() const
+    {
+        return m_blocks_uploaded.load(std::memory_order_relaxed);
+    }
+
     // "ip:port" string for display purposes.
     std::string peer_address() const
     {
@@ -58,15 +72,24 @@ class PeerConnection
    private:
     // ---- networking helpers ----
     void recv_exact(uint8_t* buf, size_t n);
-    void recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms);
+    void recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms,
+                            const std::string& context = "handshake");
     void send_bytes(const uint8_t* buf, size_t n);
     void send_message(const peer_wire::PeerMessage& msg);
     std::optional<peer_wire::PeerMessage> recv_message();
+    std::optional<peer_wire::PeerMessage> recv_message_timeout(int timeout_ms);
 
     // ---- protocol helpers ----
     void do_handshake();
     void send_interested();
     void fill_requests();
+
+    // ---- upload (seeding) helpers ----
+    // Advertise the pieces we currently hold. Sent once, right after the
+    // handshake, so peers know what they can request from us.
+    void send_bitfield();
+    // Stop choking the peer so it may begin sending us Request messages.
+    void send_unchoke();
 
     // ---- message handlers ----
     void handle_choke();
@@ -76,6 +99,8 @@ class PeerConnection
     void handle_have(const peer_wire::PeerMessage& msg);
     void handle_bitfield(const peer_wire::PeerMessage& msg);
     void handle_piece(const peer_wire::PeerMessage& msg);
+    void handle_request(const peer_wire::PeerMessage& msg);
+    void handle_cancel(const peer_wire::PeerMessage& msg);
 
     // ---- state ----
     TCPClientSocket m_socket;
@@ -83,6 +108,10 @@ class PeerConnection
 
     // Total payload bytes received; updated inside handle_piece.
     std::atomic<uint64_t> m_bytes_downloaded{0};
+    // Total payload bytes served; updated inside handle_request.
+    std::atomic<uint64_t> m_bytes_uploaded{0};
+    // Number of blocks (Piece messages) served; updated inside handle_request.
+    std::atomic<uint64_t> m_blocks_uploaded{0};
     crypto::SHA1Hash m_info_hash;
     utils::PeerId m_my_peer_id;
     bool m_connected = false;

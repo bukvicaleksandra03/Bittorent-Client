@@ -183,6 +183,12 @@ void TorrentManager::run_peer_worker(size_t peer_index)
         auto unregister = [&]()
         {
             std::lock_guard<std::mutex> lock(m_spawn_mu);
+            // Fold this connection's upload totals into the retired counters
+            // before removing it, so torrent-wide totals survive peer churn.
+            m_uploaded_bytes_retired.fetch_add(conn.bytes_uploaded(),
+                                               std::memory_order_relaxed);
+            m_blocks_uploaded_retired.fetch_add(conn.blocks_uploaded(),
+                                                std::memory_order_relaxed);
             auto& v = m_active_connections;
             v.erase(std::remove(v.begin(), v.end(), &conn), v.end());
         };
@@ -321,6 +327,59 @@ std::vector<TorrentManager::PeerStat> TorrentManager::top_peers(size_t n) const
         stats.resize(n);
     }
     return stats;
+}
+
+std::vector<TorrentManager::PeerStat> TorrentManager::top_upload_peers(
+    size_t n) const
+{
+    std::vector<PeerStat> stats;
+    {
+        std::lock_guard<std::mutex> lock(m_spawn_mu);
+        stats.reserve(m_active_connections.size());
+        for (const PeerConnection* conn : m_active_connections)
+        {
+            const uint64_t up = conn->bytes_uploaded();
+            // Only report peers we are actually seeding to.
+            if (up > 0)
+            {
+                stats.push_back({conn->peer_address(), up});
+            }
+        }
+    }
+    std::sort(stats.begin(), stats.end(),
+              [](const PeerStat& a, const PeerStat& b) { return a.bytes > b.bytes; });
+    if (stats.size() > n)
+    {
+        stats.resize(n);
+    }
+    return stats;
+}
+
+uint64_t TorrentManager::uploaded_bytes() const
+{
+    std::lock_guard<std::mutex> lock(m_spawn_mu);
+    uint64_t total = m_uploaded_bytes_retired.load(std::memory_order_relaxed);
+    for (const PeerConnection* conn : m_active_connections)
+    {
+        total += conn->bytes_uploaded();
+    }
+    return total;
+}
+
+uint64_t TorrentManager::blocks_uploaded() const
+{
+    std::lock_guard<std::mutex> lock(m_spawn_mu);
+    uint64_t total = m_blocks_uploaded_retired.load(std::memory_order_relaxed);
+    for (const PeerConnection* conn : m_active_connections)
+    {
+        total += conn->blocks_uploaded();
+    }
+    return total;
+}
+
+bool TorrentManager::is_seeding() const
+{
+    return is_complete() && !m_stopped.load(std::memory_order_relaxed);
 }
 
 uint64_t TorrentManager::peer_workers_started() const

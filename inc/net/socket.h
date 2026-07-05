@@ -43,7 +43,7 @@ class TCPSocket
     // Used when creating an SSL socket
     int get_fd() const;
 
-    ~TCPSocket();
+    virtual ~TCPSocket();
 
    protected:
     TCPSocket(int domain);
@@ -59,17 +59,33 @@ class TCPDataSocket : public TCPSocket
     void send(const char* buffer, size_t size);
     void send_with_timeout(const char* buffer, size_t size, int timeout_ms);
 
-    // Blocks until there is something to receive
+    // -----------------------------------------------------------------------
+    // Choosing the right TCP recv call
+    //
+    //  Function                   Blocks until          Throws when
+    //  ─────────────────────────────────────────────────────────────────────
+    //  recv(buf, n)               ≥1 byte ready         system error
+    //  recv_with_timeout(…, ms)   ≥1 byte OR timeout    timeout / sys error
+    //  recv_all()                 connection closes      sys error
+    //  recv_all_with_timeout(ms)  connection closes      timeout / sys error
+    //  recv_exact(buf, n)         exactly n bytes        EOF / sys error
+    //  recv_exact_timeout(…, ms)  exactly n bytes        EOF / timeout / err
+    //
+    // recv / recv_with_timeout: single-call; caller must loop if more is
+    // needed. recv_all*: for protocols where connection close means
+    // end-of-message
+    //            (e.g. HTTP/1.0). Hangs on persistent connections.
+    // recv_exact*: for length-prefixed framing (e.g. BitTorrent peer wire).
+    //              Throws on unexpected EOF, so the caller never gets partial
+    //              data.
+    // -----------------------------------------------------------------------
+
     ssize_t recv(void* buffer, size_t size);
-
-    // Throws an error if it doesn't start receiving something in timeout_ms
     ssize_t recv_with_timeout(void* buffer, size_t size, int timeout_ms);
-
-    // Calls recv until there is no longer data to be received
     std::string recv_all();
-
-    // Calls recv_all until there is no longer data to be received
     std::string recv_all_with_timeout(int timeout_ms);
+    void recv_exact(uint8_t* buf, size_t n);
+    void recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms);
 
    protected:
     explicit TCPDataSocket(int domain) : TCPSocket(domain) {}
@@ -123,9 +139,9 @@ class TCPClientSocket : public TCPDataSocket
     void connect_with_timeout(const Address& address, int timeout_ms);
 };
 
-// UDPSocket(fd, domain, destructor, move)
+// UDPSocket(fd, domain, destructor, move, sendto, recvfrom, local_address)
 // ├── UDPServerSocket(bind)
-// └── UDPClientSocket
+// └── UDPClientSocket(connect)
 
 class UDPSocket
 {
@@ -142,7 +158,7 @@ class UDPSocket
     UDPSocket(UDPSocket&& other) noexcept;
     UDPSocket& operator=(UDPSocket&& other) noexcept;
 
-    ~UDPSocket();
+    virtual ~UDPSocket();
 
     int get_fd() const;
 
@@ -150,7 +166,32 @@ class UDPSocket
 
     std::pair<std::string, std::unique_ptr<Address>> recvfrom();
 
+    // Waits up to timeout_ms for a datagram to arrive, then calls recvfrom().
+    // Throws if the timeout expires before a datagram is available.
+    std::pair<std::string, std::unique_ptr<Address>> recvfrom_with_timeout(
+        int timeout_ms);
+
     void sendto(const std::string& message, const Address& dst_address);
+
+    // Returns the local address currently assigned to this socket, as
+    // reported by getsockname().  Useful after bind() (to discover the
+    // ephemeral port chosen by the OS) or after connect() (to discover
+    // which source IP the kernel selected for the given destination).
+    // The concrete type matches the socket's domain: IPv4Address for
+    // AF_INET, IPv6Address for AF_INET6.
+    std::unique_ptr<Address> local_address() const;
+
+    // Multicast helpers (IPv4 only; silently ignored on other socket types).
+    //
+    // set_multicast_ttl  – controls how many router hops a multicast packet
+    //   may traverse.  1 = LAN only; 4 = conventional SSDP default.
+    //
+    // set_multicast_if   – forces the outgoing interface for multicast
+    //   traffic.  Pass either the sin_addr of the desired local interface or
+    //   its dotted-decimal string (e.g. "192.168.1.10").
+    void set_multicast_ttl(int ttl);
+    void set_multicast_if(in_addr iface);
+    void set_multicast_if(const std::string& iface_ip);
 
    protected:
     UDPSocket(int domain);
@@ -171,4 +212,17 @@ class UDPClientSocket : public UDPSocket
 {
    public:
     UDPClientSocket(int domain);
+
+    // Records the given address as the socket's remote peer.
+    //
+    // On UDP, connect() does NOT send any packet and does NOT complete a
+    // handshake — it simply stores the destination in the kernel's socket
+    // state.  Two useful side-effects follow:
+    //   1. Subsequent send()/recv() calls may omit the address (the kernel
+    //      fills it in automatically).
+    //   2. The kernel performs a routing-table lookup to pick the outgoing
+    //      interface and source IP.  Once connect() returns, local_address()
+    //      will reveal that source IP — which is otherwise unknowable without
+    //      walking /proc/net/route manually.
+    void connect(const Address& address);
 };

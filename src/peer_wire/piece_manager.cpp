@@ -143,6 +143,44 @@ bool PieceManager::have_piece(uint32_t index) const
     return m_have[index].load(std::memory_order_acquire);
 }
 
+std::vector<bool> PieceManager::current_bitfield() const
+{
+    std::vector<bool> bf(m_num_pieces, false);
+    for (uint32_t i = 0; i < m_num_pieces; ++i)
+    {
+        bf[i] = m_have[i].load(std::memory_order_acquire);
+    }
+    return bf;
+}
+
+std::vector<uint8_t> PieceManager::read_block(uint32_t index,
+                                              uint32_t begin,
+                                              uint32_t length)
+{
+    if (!have_piece(index))
+    {
+        throw std::runtime_error("read_block: piece not available: index=" +
+                                 std::to_string(index));
+    }
+
+    const uint32_t plen = piece_length(index);
+
+    // Guard against integer overflow and out-of-range requests. begin and
+    // length both come straight off the wire from an untrusted peer.
+    if (begin > plen || length > plen - begin)
+    {
+        throw std::runtime_error(
+            "read_block: range out of bounds: index=" + std::to_string(index) +
+            " begin=" + std::to_string(begin) +
+            " length=" + std::to_string(length) +
+            " piece_length=" + std::to_string(plen));
+    }
+
+    std::vector<uint8_t> piece = m_disk_writer.read_piece(index);
+    return std::vector<uint8_t>(piece.begin() + begin,
+                                piece.begin() + begin + length);
+}
+
 void PieceManager::abort_piece(uint32_t index)
 {
     if (index >= m_num_pieces)

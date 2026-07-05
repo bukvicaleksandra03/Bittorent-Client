@@ -5,8 +5,8 @@
 //   RUN_SINGLE_TORRENT_TEST=1 ./out/test_single_torrent
 //
 // Optional environment:
-//   TORRENT_PATH           Path to .torrent (default:
-//   <project>/torrent_files/unparsed_torrents/...) TORRENT_TEST_OUT Download
+//   TORRENT_PATH           Path to .torrent
+//   TORRENT_TEST_OUT Download
 //   directory (default: <project>/torrent_files/downloaded)
 //   TORRENT_REFERENCE_DIR  Reference files from qBittorrent
 //                          (default:

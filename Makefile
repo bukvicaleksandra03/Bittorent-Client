@@ -15,6 +15,7 @@ LDFLAGS += -pthread
 # GTEST
 LDFLAGS += -L/usr/lib -lgtest -lgtest_main
 
+
 # Includes
 INC_DIR = -I/usr/src/gtest/include
 INC_DIR += -Iinc
@@ -27,6 +28,7 @@ LOG_DIR = logs
 
 # Source files
 SOURCES = $(SRC_DIR)/net/socket.cpp \
+		 $(SRC_DIR)/net/upnp.cpp \
           $(SRC_DIR)/net/ssl_socket.cpp \
           $(SRC_DIR)/bencode/bencode_parser.cpp \
           $(SRC_DIR)/torrent_file.cpp \

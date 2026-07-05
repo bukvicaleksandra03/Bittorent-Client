@@ -6,8 +6,11 @@
 #include <iosfwd>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
+
+#include "net/upnp.h"
 
 class TorrentManager;
 
@@ -19,7 +22,13 @@ class TorrentManager;
 class SessionManager
 {
    public:
-    SessionManager() = default;
+    // listen_port is the single TCP port used by *all* torrents in this session.
+    // A single UPnP mapping is attempted at startup and kept alive for the whole
+    // session lifetime; released when the SessionManager is destroyed.
+    explicit SessionManager(uint16_t listen_port = 6881)
+        : m_listen_port(listen_port)
+    {
+    }
 
     SessionManager(const SessionManager&) = delete;
     SessionManager& operator=(const SessionManager&) = delete;
@@ -65,4 +74,13 @@ class SessionManager
     mutable std::vector<uint64_t> m_prev_bytes;
     mutable std::chrono::steady_clock::time_point m_last_snapshot;
     mutable std::vector<double> m_speeds_bps;
+
+    // Upload (seeding) speed tracking, parallel to the download vectors above.
+    mutable std::vector<uint64_t> m_prev_up_bytes;
+    mutable std::vector<double> m_up_speeds_bps;
+
+    // Single UPnP port mapping shared by all torrents in the session.
+    // Kept alive until the SessionManager is destroyed.
+    uint16_t m_listen_port{6881};
+    std::optional<UPnPPortMapping> m_upnp_mapping;
 };

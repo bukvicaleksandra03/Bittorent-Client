@@ -29,9 +29,9 @@ class Address
    public:
     enum Domain
     {
-        UNIX,
-        IPv4,
-        IPv6
+        UNIX = AF_UNIX,
+        IPv4 = AF_INET,
+        IPv6 = AF_INET6
     };
 
     static std::string domain_to_string(int domain)
@@ -45,9 +45,11 @@ class Address
             case Domain::IPv6:
                 return "IPv6";
             default:
-                throw std::runtime_error("Unknown domain: " + std::to_string(domain));
+                throw std::runtime_error("Unknown domain: " +
+                                         std::to_string(domain));
         }
     }
+
     std::string identifier;
     virtual ~Address() = default;
     virtual const sockaddr* sockaddr_ptr() const = 0;
@@ -103,6 +105,7 @@ class IPv4Address : public Address
         addr.sin_port = htons(port);
         if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0)
             throw std::runtime_error("Invalid IPv4 address");
+        inet_ntop(AF_INET, &addr.sin_addr, addrStr, INET_ADDRSTRLEN);
         identifier = ip + ":" + std::to_string(port);
     }
 
@@ -123,6 +126,12 @@ class IPv4Address : public Address
         identifier = "IPv4: " + std::string(addrStr) + ":" +
                      std::to_string(ntohs(addr.sin_port));
     }
+
+    // Returns the dotted-decimal IP string, e.g. "192.168.1.1".
+    std::string ip() const { return addrStr; }
+
+    // Returns the port number in host byte order.
+    uint16_t port() const { return ntohs(addr.sin_port); }
 
     const sockaddr* sockaddr_ptr() const
     {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <iostream>
 #include <thread>
 
 #include "peer_wire/torrent_manager.h"
@@ -32,6 +33,26 @@ void SessionManager::add(std::unique_ptr<TorrentManager> manager)
 
 void SessionManager::start_all()
 {
+    // Attempt a single UPnP port mapping for the shared listen port.
+    // Best-effort: we continue even if it fails (outbound connections still
+    // function without an open inbound mapping).
+    if (!m_upnp_mapping)
+    {
+        m_upnp_mapping = UPnPPortMapping::create(m_listen_port);
+        if (m_upnp_mapping)
+        {
+            std::cout << "[SessionManager] UPnP: mapped port "
+                      << m_upnp_mapping->external_port() << " -> "
+                      << m_listen_port << " (external IP: "
+                      << m_upnp_mapping->external_ip() << ")\n";
+        }
+        else
+        {
+            std::cout << "[SessionManager] UPnP: no gateway or mapping failed"
+                         " – continuing without port mapping\n";
+        }
+    }
+
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto& s : m_sessions)
     {
@@ -89,6 +110,8 @@ void SessionManager::print_status_locked(std::ostream& os) const
     // Grow parallel vectors to match the current number of sessions.
     m_prev_bytes.resize(m_sessions.size(), 0);
     m_speeds_bps.resize(m_sessions.size(), 0.0);
+    m_prev_up_bytes.resize(m_sessions.size(), 0);
+    m_up_speeds_bps.resize(m_sessions.size(), 0.0);
 
     if (m_last_snapshot == std::chrono::steady_clock::time_point{})
     {
@@ -98,6 +121,7 @@ void SessionManager::print_status_locked(std::ostream& os) const
             if (m_sessions[i])
             {
                 m_prev_bytes[i] = m_sessions[i]->downloaded_bytes();
+                m_prev_up_bytes[i] = m_sessions[i]->uploaded_bytes();
             }
         }
         m_last_snapshot = now;
@@ -120,6 +144,13 @@ void SessionManager::print_status_locked(std::ostream& os) const
                     (curr >= m_prev_bytes[i]) ? (curr - m_prev_bytes[i]) : 0;
                 m_speeds_bps[i] = static_cast<double>(delta) / elapsed;
                 m_prev_bytes[i] = curr;
+
+                const uint64_t up_curr = m_sessions[i]->uploaded_bytes();
+                const uint64_t up_delta =
+                    (up_curr >= m_prev_up_bytes[i]) ? (up_curr - m_prev_up_bytes[i])
+                                                    : 0;
+                m_up_speeds_bps[i] = static_cast<double>(up_delta) / elapsed;
+                m_prev_up_bytes[i] = up_curr;
             }
             m_last_snapshot = now;
         }
@@ -141,19 +172,60 @@ void SessionManager::print_status_locked(std::ostream& os) const
         const double speed = (i < m_speeds_bps.size()) ? m_speeds_bps[i] : 0.0;
         const std::string speed_str = utils::format_byte_rate(speed);
 
+        const bool seeding = s->is_seeding();
+        const char* state_str = seeding ? "seeding" : "active";
+
         os << "  " << std::setw(48) << std::left
            << s->torrent_name().substr(0, 48) << std::fixed << std::setprecision(2)
            << std::setw(7) << std::right << s->progress() << "%  "
            << std::setw(24) << std::left << size_info
            << "  " << std::setw(14) << std::left << speed_str
-           << "  " << (s->is_complete() ? "done" : "active") << "\n";
+           << "  " << state_str << "\n";
+
+        // While seeding, show what we have served: total uploaded, the number
+        // of blocks/pieces served, and the current upload rate.
+        if (seeding)
+        {
+            const double up_speed =
+                (i < m_up_speeds_bps.size()) ? m_up_speeds_bps[i] : 0.0;
+            const uint64_t up_bytes = s->uploaded_bytes();
+            const uint64_t blocks = s->blocks_uploaded();
+            const uint64_t total = s->total_bytes();
+            // Approximate "pieces worth" of data served (16 KiB blocks make up
+            // each piece, so this is uploaded / piece-equivalent of the whole
+            // torrent — a rough, human-friendly figure).
+            const std::string piece_note =
+                (total > 0)
+                    ? ("  (~" +
+                       std::to_string(static_cast<uint64_t>(
+                           up_bytes / static_cast<double>(total) * 100.0)) +
+                       "% of torrent size)")
+                    : "";
+
+            os << "    seeded: " << utils::format_byte_size(up_bytes) << " in "
+               << blocks << " blocks" << piece_note << "  up "
+               << utils::format_byte_rate(up_speed) << "\n";
+        }
 
         // Print top 10 peers by bytes downloaded.
         const auto peers = s->top_peers(10);
         if (!peers.empty())
         {
-            os << "    ---- top peers ----\n";
+            os << "    ---- top peers (download) ----\n";
             for (const auto& p : peers)
+            {
+                os << "      " << std::setw(26) << std::left << p.address
+                   << "  " << utils::format_byte_size(p.bytes) << "\n";
+            }
+        }
+
+        // Print the peers we are currently seeding to (those we have served
+        // data to), ordered by bytes uploaded.
+        const auto up_peers = s->top_upload_peers(10);
+        if (!up_peers.empty())
+        {
+            os << "    ---- seeding to (" << up_peers.size() << ") ----\n";
+            for (const auto& p : up_peers)
             {
                 os << "      " << std::setw(26) << std::left << p.address
                    << "  " << utils::format_byte_size(p.bytes) << "\n";

@@ -42,6 +42,18 @@ class TorrentManager
     // Total size of the torrent in bytes.
     uint64_t total_bytes() const;
 
+    // Total payload bytes served to peers across the torrent's lifetime
+    // (sum of currently-active connections plus connections that have closed).
+    uint64_t uploaded_bytes() const;
+
+    // Total number of blocks (Piece messages) served to peers across the
+    // torrent's lifetime.
+    uint64_t blocks_uploaded() const;
+
+    // True once the download is complete and the torrent is actively seeding
+    // (i.e. complete and not stopped).
+    bool is_seeding() const;
+
     const std::string& torrent_name() const;
 
     // Peer pool statistics (each worker tries one tracker peer index once).
@@ -60,6 +72,11 @@ class TorrentManager
     // Snapshot the bytes downloaded from every active peer connection, sort
     // descending, and return the top `n` entries.  Thread-safe.
     std::vector<PeerStat> top_peers(size_t n) const;
+
+    // Snapshot the bytes uploaded to every active peer connection, keep only
+    // peers we have actually served data to, sort descending, and return the
+    // top `n` entries.  Thread-safe.
+    std::vector<PeerStat> top_upload_peers(size_t n) const;
 
    private:
     enum class TrackerEvent : uint32_t
@@ -104,6 +121,12 @@ class TorrentManager
     // Connections that are currently inside PeerConnection::run().
     // Written under m_spawn_mu; read by stop() before joining threads.
     std::vector<PeerConnection*> m_active_connections;
+
+    // Upload stats from connections that have already closed.  Live
+    // connections are summed on demand; these accumulate the rest so totals
+    // survive peer churn.  Updated under m_spawn_mu in run_peer_worker.
+    std::atomic<uint64_t> m_uploaded_bytes_retired{0};
+    std::atomic<uint64_t> m_blocks_uploaded_retired{0};
 
     std::atomic<uint64_t> m_peer_workers_started{0};
     std::atomic<uint64_t> m_peer_handshakes_ok{0};

@@ -67,41 +67,25 @@ void PeerConnection::cancel()
 
 void PeerConnection::recv_exact(uint8_t* buf, size_t n)
 {
-    size_t total = 0;
-    while (total < n)
+    try
     {
-        ssize_t got = m_socket.recv(buf + total, n - total);
-        if (got == 0)
-        {
-            LLOG_THROW(
-                *m_logger,
-                "peer closed connection (EOF) after " + std::to_string(total) +
-                    "/" + std::to_string(n) + " bytes" +
-                    (m_current_piece
-                         ? "; in-flight piece=" +
-                               std::to_string(m_current_piece->piece_index) +
-                               " offset=" +
-                               std::to_string(
-                                   m_current_piece->next_block_offset) +
-                               " requests_in_flight=" +
-                               std::to_string(
-                                   m_current_piece->requests_in_flight)
-                         : "; no piece in flight"));
-        }
-        if (got < 0)
-        {
-            const int err = errno;
-            LLOG_THROW(
-                *m_logger,
-                "recv() error after " + std::to_string(total) + "/" +
-                    std::to_string(n) + " bytes: " + strerror(err) +
-                    " (errno=" + std::to_string(err) + ")" +
-                    (m_current_piece
-                         ? "; in-flight piece=" +
-                               std::to_string(m_current_piece->piece_index)
-                         : "; no piece in flight"));
-        }
-        total += static_cast<size_t>(got);
+        m_socket.recv_exact(buf, n);
+    }
+    catch (const std::runtime_error& e)
+    {
+        LLOG_THROW(
+            *m_logger,
+            std::string(e.what()) +
+                (m_current_piece
+                     ? "; in-flight piece=" +
+                           std::to_string(m_current_piece->piece_index) +
+                           " offset=" +
+                           std::to_string(
+                               m_current_piece->next_block_offset) +
+                           " requests_in_flight=" +
+                           std::to_string(
+                               m_current_piece->requests_in_flight)
+                     : "; no piece in flight"));
     }
 }
 
@@ -144,45 +128,51 @@ std::optional<peer_wire::PeerMessage> PeerConnection::recv_message()
     return msg;
 }
 
-// Like recv_exact but applies a single wall-clock deadline to the entire read.
-// Uses poll() before each recv() so the per-call timeout shrinks as bytes
-// arrive.  Throws a descriptive message on timeout or EOF so the caller can
-// log it with context ("handshake timed out", "peer closed mid-handshake", …).
-void PeerConnection::recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms)
+// Same as recv_message() but each recv_exact call is bounded by timeout_ms.
+// If the peer stops sending for longer than timeout_ms, an exception is thrown,
+// which propagates out of run(), triggers the PeerConnection destructor, and
+// releases any claimed piece back to PieceManager via abort_piece().
+std::optional<peer_wire::PeerMessage>
+PeerConnection::recv_message_timeout(int timeout_ms)
 {
-    using clock = std::chrono::steady_clock;
-    const auto deadline =
-        clock::now() + std::chrono::milliseconds(timeout_ms);
+    uint8_t len_buf[4];
+    recv_exact_timeout(len_buf, 4, timeout_ms, "message length");
+    uint32_t length = byte_order::read_be32(len_buf);
 
-    size_t total = 0;
-    while (total < n)
+    if (length == 0)
     {
-        const auto now = clock::now();
-        const int remaining_ms = static_cast<int>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - now)
-                .count());
+        return std::nullopt;  // keep-alive
+    }
 
-        if (remaining_ms <= 0)
-        {
-            LLOG_THROW(*m_logger,
-                       "handshake timed out (" + std::to_string(total) + "/" +
-                           std::to_string(n) + " bytes in " +
-                           std::to_string(timeout_ms) + "ms)");
-        }
+    if (length > 1u << 24)
+    {
+        LLOG_THROW(*m_logger, "message length exceeds sanity limit");
+    }
 
-        ssize_t got =
-            m_socket.recv_with_timeout(buf + total, n - total, remaining_ms);
+    std::vector<uint8_t> body(length);
+    recv_exact_timeout(body.data(), length, timeout_ms, "message body");
 
-        if (got == 0)
-        {
-            LLOG_THROW(
-                *m_logger,
-                "peer closed connection (EOF) during handshake after " +
-                    std::to_string(total) + "/" + std::to_string(n) +
-                    " bytes");
-        }
-        total += static_cast<size_t>(got);
+    peer_wire::PeerMessage msg;
+    msg.id = static_cast<peer_wire::MessageId>(body[0]);
+    if (length > 1)
+    {
+        msg.payload.assign(body.begin() + 1, body.end());
+    }
+    return msg;
+}
+
+// Thin wrapper around TCPDataSocket::recv_exact_timeout that adds context
+// ("handshake", "message length", …) to any exception before re-throwing.
+void PeerConnection::recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms,
+                                        const std::string& context)
+{
+    try
+    {
+        m_socket.recv_exact_timeout(buf, n, timeout_ms);
+    }
+    catch (const std::runtime_error& e)
+    {
+        LLOG_THROW(*m_logger, context + ": " + e.what());
     }
 }
 
@@ -200,6 +190,12 @@ void PeerConnection::connect(int timeout_ms)
     do_handshake();
     m_connected = true;
     LLOG_DEBUG(*m_logger, "handshake OK");
+
+    // Immediately after the handshake, advertise which pieces we hold so the
+    // peer can decide whether it wants to download from us.  Per the protocol
+    // a Bitfield, if sent at all, must be the very first message after the
+    // handshake.
+    send_bitfield();
 }
 
 void PeerConnection::do_handshake()
@@ -320,6 +316,61 @@ void PeerConnection::fill_requests()
 }
 
 // ---------------------------------------------------------------------------
+// Upload (seeding) helpers
+// ---------------------------------------------------------------------------
+
+void PeerConnection::send_bitfield()
+{
+    std::vector<bool> have = m_piece_manager.current_bitfield();
+
+    uint32_t have_count = 0;
+    for (bool b : have)
+    {
+        if (b)
+            ++have_count;
+    }
+
+    // Sending an all-zero bitfield is legal but pointless; peers treat a
+    // missing bitfield the same as "has nothing", so skip it when we have no
+    // pieces yet (e.g. we just started downloading).
+    if (have_count == 0)
+    {
+        LLOG_DEBUG(*m_logger,
+                   "not sending bitfield (no pieces available yet)");
+        return;
+    }
+
+    // Pack the boolean vector MSB-first into bytes, matching the wire format
+    // expected by BitfieldMessage::has_piece (bit 7 = lowest piece index).
+    const size_t num_bytes = (have.size() + 7) / 8;
+    peer_wire::BitfieldMessage bf;
+    bf.bitfield.assign(num_bytes, 0);
+    for (uint32_t i = 0; i < have.size(); ++i)
+    {
+        if (have[i])
+        {
+            bf.bitfield[i / 8] |= static_cast<uint8_t>(1u << (7 - (i % 8)));
+        }
+    }
+
+    send_message(bf.to_peer_message());
+    LLOG_DEBUG(*m_logger,
+               "sent bitfield advertising " + std::to_string(have_count) + "/" +
+                   std::to_string(have.size()) + " pieces");
+}
+
+void PeerConnection::send_unchoke()
+{
+    if (!m_am_choking)
+        return;
+    peer_wire::PeerMessage msg;
+    msg.id = peer_wire::MessageId::Unchoke;
+    send_message(msg);
+    m_am_choking = false;
+    LLOG_DEBUG(*m_logger, "unchoked peer");
+}
+
+// ---------------------------------------------------------------------------
 // Message handlers
 // ---------------------------------------------------------------------------
 
@@ -349,6 +400,11 @@ void PeerConnection::handle_interested()
 {
     LLOG_DEBUG(*m_logger, "peer expressed interest");
     m_peer_interested = true;
+
+    // Minimal seeding policy: unchoke any peer that becomes interested so it
+    // can start requesting blocks.  A real tit-for-tat / optimistic-unchoke
+    // scheduler is a later refinement.
+    send_unchoke();
 }
 
 void PeerConnection::handle_not_interested()
@@ -511,16 +567,101 @@ void PeerConnection::handle_piece(const peer_wire::PeerMessage& msg)
     m_current_piece.reset();
 }
 
+void PeerConnection::handle_request(const peer_wire::PeerMessage& msg)
+{
+    auto req = peer_wire::RequestMessage::from_peer_message(msg);
+
+    // If we are still choking this peer it must not be sending requests; a
+    // well-behaved peer waits for our Unchoke.  Drop the request silently
+    // rather than serving data we have not agreed to send.
+    if (m_am_choking)
+    {
+        LLOG_DEBUG(*m_logger,
+                   "ignoring Request while choking peer: index=" +
+                       std::to_string(req.index));
+        return;
+    }
+
+    // Reject blocks larger than the protocol's accepted maximum (16 KiB).
+    // Most clients close the connection on oversized requests; we simply
+    // refuse to serve them to avoid being used as an amplification vector.
+    if (req.length == 0 || req.length > BLOCK_SIZE)
+    {
+        LLOG_WARNING(*m_logger,
+                     "rejecting Request with bad length=" +
+                         std::to_string(req.length) +
+                         " (index=" + std::to_string(req.index) + ")");
+        return;
+    }
+
+    // read_block validates index/begin/length against the piece bounds and
+    // that we actually hold the piece; it throws otherwise.  Treat a failed
+    // read as a protocol/availability error and skip serving this block
+    // instead of tearing down the whole connection.
+    std::vector<uint8_t> block;
+    try
+    {
+        block = m_piece_manager.read_block(req.index, req.begin, req.length);
+    }
+    catch (const std::exception& e)
+    {
+        LLOG_WARNING(*m_logger,
+                     std::string("cannot serve requested block: ") + e.what());
+        return;
+    }
+
+    peer_wire::PieceMessage piece;
+    piece.index = req.index;
+    piece.begin = req.begin;
+    piece.block = std::move(block);
+    send_message(piece.to_peer_message());
+
+    m_bytes_uploaded.fetch_add(req.length, std::memory_order_relaxed);
+    m_blocks_uploaded.fetch_add(1, std::memory_order_relaxed);
+
+    LLOG_DEBUG(*m_logger,
+               "served block: piece=" + std::to_string(req.index) +
+                   " offset=" + std::to_string(req.begin) +
+                   " len=" + std::to_string(req.length));
+}
+
+void PeerConnection::handle_cancel(const peer_wire::PeerMessage& msg)
+{
+    // We serve requests synchronously inside handle_request, so by the time a
+    // Cancel could arrive the block has already been sent.  There is nothing
+    // queued to cancel; just log it.
+    auto cancel = peer_wire::CancelMessage::from_peer_message(msg);
+    LLOG_DEBUG(*m_logger,
+               "received Cancel (nothing queued): index=" +
+                   std::to_string(cancel.index) +
+                   " offset=" + std::to_string(cancel.begin));
+}
+
 // ---------------------------------------------------------------------------
 // Main download loop
 // ---------------------------------------------------------------------------
 
 void PeerConnection::run()
 {
-    LLOG_DEBUG(*m_logger, "download loop started");
-    while (!m_piece_manager.is_complete())
+    LLOG_DEBUG(*m_logger, "peer loop started");
+
+    // The loop runs until the socket dies (recv throws) or cancel() shuts the
+    // socket down.  We intentionally do NOT exit when the torrent is complete:
+    // a finished client keeps the connection open to serve (seed) pieces to
+    // this peer.  fill_requests() simply becomes a no-op once we have every
+    // piece.
+    //
+    // 120 s matches the BitTorrent keep-alive interval (BEP 3): a live peer
+    // must send at least a keep-alive message every two minutes.  If nothing
+    // arrives within that window the peer is dead; the exception propagates
+    // out of run(), the PeerConnection destructor fires, and abort_piece()
+    // releases any claimed piece back to PieceManager so another peer can
+    // pick it up.
+    static constexpr int INACTIVITY_TIMEOUT_MS = 120'000;
+
+    while (true)
     {
-        auto maybe_msg = recv_message();
+        auto maybe_msg = recv_message_timeout(INACTIVITY_TIMEOUT_MS);
         if (!maybe_msg)
             continue;  // keep-alive
 
@@ -549,15 +690,11 @@ void PeerConnection::run()
                 handle_piece(msg);
                 break;
             case peer_wire::MessageId::Request:
-                LLOG_DEBUG(*m_logger,
-                           "Received Request message; seeding/upload path not "
-                           "implemented, ignoring");
+                handle_request(msg);
                 break;
             case peer_wire::MessageId::Cancel:
-                LLOG_DEBUG(*m_logger,
-                           "Received Cancel message; seeding/upload path not "
-                           "implemented, ignoring");
-                break;  // seeding not implemented yet
+                handle_cancel(msg);
+                break;
         }
 
         fill_requests();

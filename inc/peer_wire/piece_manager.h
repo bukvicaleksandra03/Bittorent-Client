@@ -70,6 +70,18 @@ class PieceManager
     // Lock-free: single atomic load.
     bool have_piece(uint32_t index) const;
 
+    // Snapshot of which pieces we currently hold (true = verified + on disk).
+    // Used to advertise our Bitfield to peers when seeding. Lock-free.
+    std::vector<bool> current_bitfield() const;
+
+    // Read the block [begin, begin + length) of piece `index` from disk so it
+    // can be served to a requesting peer. Throws if we do not have the piece or
+    // the requested range falls outside the piece. Not const: read_piece may
+    // lazily preallocate file handles.
+    std::vector<uint8_t> read_block(uint32_t index,
+                                    uint32_t begin,
+                                    uint32_t length);
+
     // Release a claimed piece so another peer can retry it.
     // Called when a peer is choked or disconnects mid-download.
     void abort_piece(uint32_t index);

@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -145,10 +146,21 @@ void TCPDataSocket::send_with_timeout(const char* buffer,
                                       size_t size,
                                       int timeout_ms)
 {
+    using clock = std::chrono::steady_clock;
+    auto deadline = clock::now() + std::chrono::milliseconds(timeout_ms);
+
     size_t total_sent = 0;
     while (total_sent < size)
     {
-        poll_or_throw(s_sockfd, POLLOUT, timeout_ms, "send()");
+        int remaining_ms = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - clock::now()).count());
+
+        if (remaining_ms <= 0)
+            throw std::runtime_error("send() timed out after " +
+                          std::to_string(timeout_ms) + "ms");
+
+        poll_or_throw(s_sockfd, POLLOUT, remaining_ms, "send()");
 
         ssize_t n = ::send(s_sockfd, buffer + total_sent, size - total_sent, 0);
         if (n <= 0)
@@ -194,26 +206,93 @@ std::string TCPDataSocket::recv_all()
 
 std::string TCPDataSocket::recv_all_with_timeout(int timeout_ms)
 {
+    using clock = std::chrono::steady_clock;
+    auto deadline = clock::now() + std::chrono::milliseconds(timeout_ms);
+
     std::string result;
     char buffer[4096];
-    ssize_t bytes_read;
 
-    while ((bytes_read =
-                recv_with_timeout(buffer, sizeof(buffer), timeout_ms)) > 0)
+    while (true)
     {
-        result.append(buffer, bytes_read);
+        int remaining_ms = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - clock::now()).count());
+
+        if (remaining_ms <= 0)
+            throw std::runtime_error("recv_all() timed out after " +
+                          std::to_string(timeout_ms) + "ms");
+
+        ssize_t bytes_read =
+            recv_with_timeout(buffer, sizeof(buffer), remaining_ms);
+        if (bytes_read == 0)
+            break;
+
+        result.append(buffer, static_cast<size_t>(bytes_read));
     }
 
     return result;
+}
+
+void TCPDataSocket::recv_exact(uint8_t* buf, size_t n)
+{
+    size_t total = 0;
+    while (total < n)
+    {
+        ssize_t got = recv(buf + total, n - total);
+        if (got == 0)
+        {
+            throw std::runtime_error(
+                "recv_exact: peer closed connection (EOF) after " +
+                std::to_string(total) + "/" + std::to_string(n) + " bytes");
+        }
+        total += static_cast<size_t>(got);
+    }
+}
+
+void TCPDataSocket::recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms)
+{
+    using clock = std::chrono::steady_clock;
+    const auto deadline = clock::now() + std::chrono::milliseconds(timeout_ms);
+
+    size_t total = 0;
+    while (total < n)
+    {
+        const int remaining_ms = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - clock::now())
+                .count());
+
+        if (remaining_ms <= 0)
+        {
+            throw std::runtime_error(
+                "recv_exact_timeout: timed out after " +
+                std::to_string(timeout_ms) + "ms (" + std::to_string(total) +
+                "/" + std::to_string(n) + " bytes received)");
+        }
+
+        ssize_t got = recv_with_timeout(buf + total, n - total, remaining_ms);
+        if (got == 0)
+        {
+            throw std::runtime_error(
+                "recv_exact_timeout: peer closed connection (EOF) after " +
+                std::to_string(total) + "/" + std::to_string(n) + " bytes");
+        }
+        total += static_cast<size_t>(got);
+    }
 }
 
 TCPServerSocket::TCPServerSocket(int domain) : TCPSocket(domain)
 {
     s_sockfd = ::socket(domain, s_socket_type, 0);
     if (s_sockfd == -1)
-    {
         throw std::runtime_error("Failed to create socket");
-    }
+
+    // Allow re-binding to a port that is still in TIME_WAIT from a previous
+    // run, so a quick restart does not fail with EADDRINUSE.
+    int opt = 1;
+    if (::setsockopt(s_sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+        throw std::runtime_error("setsockopt(SO_REUSEADDR) failed: " +
+                      std::string(strerror(errno)));
 }
 
 TCPServerSocket::TCPServerSocket(TCPServerSocket&& other) noexcept
@@ -448,6 +527,13 @@ std::pair<std::string, std::unique_ptr<Address>> UDPSocket::recvfrom()
     return {std::move(message), std::move(src_address)};
 }
 
+std::pair<std::string, std::unique_ptr<Address>> UDPSocket::recvfrom_with_timeout(
+    int timeout_ms)
+{
+    poll_or_throw(s_sockfd, POLLIN, timeout_ms, "recvfrom_with_timeout");
+    return recvfrom();
+}
+
 void UDPSocket::sendto(const std::string& message, const Address& dst_address)
 {
     ssize_t bytes_sent = ::sendto(s_sockfd,
@@ -461,7 +547,67 @@ void UDPSocket::sendto(const std::string& message, const Address& dst_address)
                       std::string(strerror(errno)));
 }
 
-UDPServerSocket::UDPServerSocket(int domain) : UDPSocket(domain) {}
+std::unique_ptr<Address> UDPSocket::local_address() const
+{
+    if (s_domain == AF_INET)
+    {
+        sockaddr_in addr{};
+        socklen_t len = sizeof(addr);
+        if (::getsockname(s_sockfd, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
+            throw std::runtime_error("getsockname() failed: " +
+                          std::string(strerror(errno)));
+        return std::make_unique<IPv4Address>(
+            reinterpret_cast<const sockaddr*>(&addr));
+    }
+    else if (s_domain == AF_INET6)
+    {
+        sockaddr_in6 addr{};
+        socklen_t len = sizeof(addr);
+        if (::getsockname(s_sockfd, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
+            throw std::runtime_error("getsockname() failed: " +
+                          std::string(strerror(errno)));
+        return std::make_unique<IPv6Address>(
+            reinterpret_cast<const sockaddr*>(&addr));
+    }
+    throw std::runtime_error("local_address(): unsupported socket domain");
+}
+
+void UDPSocket::set_multicast_ttl(int ttl)
+{
+    if (s_domain != AF_INET)
+        return; // silently ignored for non-IPv4 sockets
+    u_char val = static_cast<u_char>(ttl);
+    if (::setsockopt(s_sockfd, IPPROTO_IP, IP_MULTICAST_TTL, &val, sizeof(val)) < 0)
+        throw std::runtime_error("setsockopt(IP_MULTICAST_TTL) failed: " +
+                      std::string(strerror(errno)));
+}
+
+void UDPSocket::set_multicast_if(in_addr iface)
+{
+    if (s_domain != AF_INET)
+        return; // silently ignored for non-IPv4 sockets
+    if (::setsockopt(s_sockfd, IPPROTO_IP, IP_MULTICAST_IF, &iface, sizeof(iface)) < 0)
+        throw std::runtime_error("setsockopt(IP_MULTICAST_IF) failed: " +
+                      std::string(strerror(errno)));
+}
+
+void UDPSocket::set_multicast_if(const std::string& iface_ip)
+{
+    in_addr addr{};
+    if (::inet_aton(iface_ip.c_str(), &addr) == 0)
+        throw std::runtime_error("set_multicast_if: invalid IP address: " + iface_ip);
+    set_multicast_if(addr);
+}
+
+UDPServerSocket::UDPServerSocket(int domain) : UDPSocket(domain)
+{
+    // Allow re-binding to a port that is still in TIME_WAIT from a previous
+    // run, so a quick restart does not fail with EADDRINUSE.
+    int opt = 1;
+    if (::setsockopt(s_sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+        throw std::runtime_error("setsockopt(SO_REUSEADDR) failed: " +
+                      std::string(strerror(errno)));
+}
 
 void UDPServerSocket::bind(const Address& address)
 {
@@ -478,3 +624,14 @@ void UDPServerSocket::bind(const Address& address)
 }
 
 UDPClientSocket::UDPClientSocket(int domain) : UDPSocket(domain) {}
+
+void UDPClientSocket::connect(const Address& address)
+{
+    if (address.domain() != s_domain)
+        throw std::runtime_error(
+            "connect(): address domain does not match socket domain");
+
+    if (::connect(s_sockfd, address.sockaddr_ptr(), address.size()) < 0)
+        throw std::runtime_error("connect() failed: " +
+                      std::string(strerror(errno)));
+}
