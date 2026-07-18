@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "logger.h"
-#include "peer.h"
+#include "peer_address.h"
 #include "peer_wire/disk_writer.h"
 #include "peer_wire/piece_manager.h"
 #include "torrent_file.h"
@@ -56,6 +56,15 @@ class TorrentManager
 
     const std::string& torrent_name() const;
 
+    // Inject a DHT-discovered peer directly into the peer pool.
+    void add_dht_peer(const PeerAddress& peer);
+
+    // Raw 20-byte info hash as std::string (for DhtNode::get_peers / announce).
+    std::string info_hash_str() const;
+
+    // Hex-encoded info hash (for matching DHT peer-callback info_hash_hex).
+    std::string info_hash_hex() const;
+
     // Peer pool statistics (each worker tries one tracker peer index once).
     uint64_t peer_workers_started() const;
     uint64_t peer_handshakes_ok() const;
@@ -77,6 +86,9 @@ class TorrentManager
     // peers we have actually served data to, sort descending, and return the
     // top `n` entries.  Thread-safe.
     std::vector<PeerStat> top_upload_peers(size_t n) const;
+
+    // KRPC traffic logger: <log_output_dir>/<torrent_name>/dht.log
+    std::shared_ptr<logger::Logger> krpc_logger() const;
 
    private:
     enum class TrackerEvent : uint32_t
@@ -104,13 +116,16 @@ class TorrentManager
     // PeerConnection, so peer threads never share a log mutex.
     std::shared_ptr<logger::Logger> m_logger;
 
+    // KRPC-only logger registered with the shared DhtNode via SessionManager.
+    std::shared_ptr<logger::Logger> m_krpc_logger;
+
     DiskWriter m_disk_writer;
     PieceManager m_piece_manager;
 
     std::unique_ptr<TrackerCommunicator> m_tracker;
 
     // Full tracker peer list; workers pull the next index until exhausted.
-    std::vector<Peer> m_all_peers;
+    std::vector<PeerAddress> m_all_peers;
     size_t m_next_peer_index = 0;
     size_t m_workers_running = 0;
     static constexpr size_t k_max_concurrent_peers = 10;

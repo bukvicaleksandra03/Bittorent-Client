@@ -8,7 +8,7 @@
 #include "crypto.h"
 #include "logger.h"
 #include "net/socket.h"
-#include "peer.h"
+#include "peer_address.h"
 #include "peer_wire/peer_message.h"
 #include "peer_wire/piece_manager.h"
 #include "utils.h"
@@ -18,7 +18,7 @@ class PeerConnection
    public:
     // lg is the per-peer Logger created by TorrentManager. Every PeerConnection
     // writes to its own file, so peer threads never share a log mutex.
-    PeerConnection(Peer peer,
+    PeerConnection(PeerAddress peer,
                    crypto::SHA1Hash info_hash,
                    utils::PeerId my_peer_id,
                    PieceManager& piece_manager,
@@ -104,7 +104,7 @@ class PeerConnection
 
     // ---- state ----
     TCPClientSocket m_socket;
-    Peer m_peer;
+    PeerAddress m_peer;
 
     // Total payload bytes received; updated inside handle_piece.
     std::atomic<uint64_t> m_bytes_downloaded{0};

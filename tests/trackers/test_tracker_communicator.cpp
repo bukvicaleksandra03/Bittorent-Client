@@ -8,7 +8,7 @@
 
 #include "bencode/bencode_parser.h"
 #include "logger.h"
-#include "peer.h"
+#include "peer_address.h"
 #include "torrent_file.h"
 #include "trackers/tracker_communicator.h"
 #include "trackers/tracker_communicator_factory.h"
@@ -46,7 +46,7 @@ class TrackerCommunicatorTest : public ::testing::TestWithParam<std::string>
         log->set_level(logger::Level::DEBUG);
 
         const std::string& path = GetParam();
-        BencodeParser parser(path);
+        bencode::Parser parser(path);
         torrent = parser.parse();
         ASSERT_NE(torrent, nullptr) << "Failed to parse: " << path;
 
@@ -63,7 +63,7 @@ class TrackerCommunicatorTest : public ::testing::TestWithParam<std::string>
                   << std::endl;
     }
 
-    std::vector<Peer> do_announce(uint64_t downloaded,
+    std::vector<PeerAddress> do_announce(uint64_t downloaded,
                                   uint64_t left,
                                   uint64_t uploaded,
                                   uint32_t event)
@@ -78,7 +78,7 @@ class TrackerCommunicatorTest : public ::testing::TestWithParam<std::string>
                                       LISTEN_PORT);
     }
 
-    void print_peers(const std::vector<Peer>& peers, size_t max = 10)
+    void print_peers(const std::vector<PeerAddress>& peers, size_t max = 10)
     {
         std::cout << "[  INFO  ] Received " << peers.size() << " peers"
                   << std::endl;

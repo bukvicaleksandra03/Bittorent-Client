@@ -5,6 +5,8 @@
 #include <iostream>
 #include <thread>
 
+#include "dht/dht_node.h"
+#include "peer_address.h"
 #include "peer_wire/torrent_manager.h"
 #include "utils.h"
 
@@ -14,6 +16,11 @@ namespace
 constexpr const char k_clear_screen[] = "\033[2J\033[H";
 
 }  // namespace
+
+SessionManager::SessionManager(uint16_t listen_port)
+    : m_listen_port(listen_port)
+{
+}
 
 SessionManager::~SessionManager()
 {
@@ -28,6 +35,10 @@ void SessionManager::add(std::unique_ptr<TorrentManager> manager)
         return;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_dht_node && m_dht_node->is_running())
+    {
+        m_dht_node->add_krpc_logger(manager->krpc_logger());
+    }
     m_sessions.push_back(std::move(manager));
 }
 
@@ -53,12 +64,48 @@ void SessionManager::start_all()
         }
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-    for (auto& s : m_sessions)
+    // Start DHT node.  Use the same port as the BitTorrent listen port so the
+    // UPnP mapping (if any) also covers DHT traffic.
+    if (!m_dht_node)
     {
-        if (s)
+        m_dht_node = std::make_unique<dht::DhtNode>(m_listen_port);
+
+        // When the DHT finds peers for an info hash, inject them into the
+        // matching TorrentManager (if we have one).
+        m_dht_node->set_peer_callback(
+            [this](const std::string& info_hash_hex,
+                   const std::string& ip,
+                   uint16_t port)
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                for (auto& s : m_sessions)
+                {
+                    if (s && s->info_hash_hex() == info_hash_hex)
+                    {
+                        PeerAddress p;
+                        p.ip   = ip;
+                        p.port = port;
+                        s->add_dht_peer(p);
+                    }
+                }
+            });
+
+        m_dht_node->start();
+        std::cout << "[SessionManager] DHT: started on port " << m_listen_port
+                  << " (node id: " << m_dht_node->self_id().hex() << ")\n";
+    }
+
+    // Kick off get_peers lookups for every torrent we already know about.
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& s : m_sessions)
         {
-            s->start();
+            if (s)
+            {
+                m_dht_node->add_krpc_logger(s->krpc_logger());
+                m_dht_node->get_peers(s->info_hash_str());
+                s->start();
+            }
         }
     }
 }
@@ -66,6 +113,15 @@ void SessionManager::start_all()
 void SessionManager::stop_all()
 {
     stop_status_refresh();
+
+    // Stop DHT before the torrent sessions so the callback cannot fire into
+    // a half-destroyed TorrentManager.
+    if (m_dht_node)
+    {
+        m_dht_node->stop();
+        m_dht_node.reset();
+    }
+
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto& s : m_sessions)
     {

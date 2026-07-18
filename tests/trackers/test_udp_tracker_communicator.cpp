@@ -6,7 +6,7 @@
 
 #include "bencode/bencode_parser.h"
 #include "logger.h"
-#include "peer.h"
+#include "peer_address.h"
 #include "torrent_file.h"
 #include "trackers/udp_tracker_communicator.h"
 #include "utils.h"
@@ -29,7 +29,7 @@ class UDPTrackerTest : public ::testing::Test
         auto log = std::make_shared<logger::Logger>();
         log->set_level(logger::Level::DEBUG);
 
-        BencodeParser parser(TORRENT_PATH);
+        bencode::Parser parser(TORRENT_PATH);
         torrent = parser.parse();
         ASSERT_NE(torrent, nullptr) << "Failed to parse torrent file";
 
@@ -47,7 +47,7 @@ class UDPTrackerTest : public ::testing::Test
                   << std::endl;
     }
 
-    std::vector<Peer> do_announce(uint64_t downloaded, uint64_t left,
+    std::vector<PeerAddress> do_announce(uint64_t downloaded, uint64_t left,
                                   uint64_t uploaded, uint32_t event)
     {
         return communicator.announce(tracker, torrent->get_info_hash(), peer_id,
@@ -55,7 +55,7 @@ class UDPTrackerTest : public ::testing::Test
                                      LISTEN_PORT);
     }
 
-    void print_peers(const std::vector<Peer>& peers, size_t max = 10)
+    void print_peers(const std::vector<PeerAddress>& peers, size_t max = 10)
     {
         std::cout << "[  INFO  ] Received " << peers.size() << " peers"
                   << std::endl;

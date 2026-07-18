@@ -31,7 +31,9 @@ SOURCES = $(SRC_DIR)/net/socket.cpp \
 		 $(SRC_DIR)/net/upnp.cpp \
           $(SRC_DIR)/net/ssl_socket.cpp \
           $(SRC_DIR)/bencode/bencode_parser.cpp \
+          $(SRC_DIR)/bencode/bencode_encoder.cpp \
           $(SRC_DIR)/torrent_file.cpp \
+          $(SRC_DIR)/peer_address.cpp \
           $(SRC_DIR)/trackers/udp_tracker_communicator.cpp \
           $(SRC_DIR)/trackers/http_tracker_communicator.cpp \
           $(SRC_DIR)/peer_wire/peer_message.cpp \
@@ -39,10 +41,14 @@ SOURCES = $(SRC_DIR)/net/socket.cpp \
           $(SRC_DIR)/peer_wire/piece_manager.cpp \
           $(SRC_DIR)/peer_wire/peer_connection.cpp \
           $(SRC_DIR)/peer_wire/torrent_manager.cpp \
-          $(SRC_DIR)/peer_wire/session_manager.cpp
+          $(SRC_DIR)/peer_wire/session_manager.cpp \
+          $(SRC_DIR)/dht/node_id.cpp \
+          $(SRC_DIR)/dht/routing_table.cpp \
+          $(SRC_DIR)/dht/krpc.cpp \
+          $(SRC_DIR)/dht/dht_node.cpp
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 
-.PHONY: all clean dirs test
+.PHONY: all clean dirs test test-fast test-integration
 
 all: dirs $(TARGET)
 
@@ -59,6 +65,16 @@ $(OBJ_DIR)/%.o: %.cpp
 TEST_SRCS = $(shell find $(TEST_DIR) -name 'test_*.cpp')
 TEST_BINS = $(addprefix $(OUT_DIR)/,$(patsubst %.cpp,%,$(notdir $(TEST_SRCS))))
 
+# Network-dependent / slow. Use before tracker or UPnP changes: `make test-integration`.
+SLOW_TEST_BINS = $(OUT_DIR)/test_tracker_communicator \
+                 $(OUT_DIR)/test_udp_tracker_communicator \
+                 $(OUT_DIR)/test_upnp \
+                 $(OUT_DIR)/test_dht_loopback
+# Manual-only: long real download; run via download_torrent.sh or env var.
+MANUAL_TEST_BINS = $(OUT_DIR)/test_single_torrent \
+                   $(OUT_DIR)/test_dht_get_peers_from_torrent
+FAST_TEST_BINS = $(filter-out $(SLOW_TEST_BINS) $(MANUAL_TEST_BINS),$(TEST_BINS))
+
 # Build $(OUT_DIR)/test_* from its source + library objects. Source is found
 # by basename so nested paths under tests/ still work.
 $(OUT_DIR)/test_%: $(OBJECTS)
@@ -66,16 +82,31 @@ $(OUT_DIR)/test_%: $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $(INC_DIR) $(OBJECTS) \
 		$$(find $(TEST_DIR) -name '$(notdir $@).cpp') -o $@ $(LDFLAGS)
 
+# Keep binaries when building via `make test_foo` (otherwise make treats
+# out/test_foo as an intermediate and deletes it after the alias target).
+.SECONDARY: $(TEST_BINS)
+
 # Convenience: `make test_foo` builds `out/test_foo` (same stem).
 test_%: $(OUT_DIR)/test_%
 	@true
 
-# `make test` builds and runs every test binary under out/.
-test: dirs $(TEST_BINS)
-	@for bin in $(TEST_BINS); do \
+# `make test-fast` — unit tests + local loopback (no live trackers). Default for
+# small changes.
+test-fast: dirs $(FAST_TEST_BINS)
+	@for bin in $(FAST_TEST_BINS); do \
 		echo "========== Running $$bin =========="; \
 		./$$bin || exit 1; \
 	done
+
+# `make test-integration` — live HTTP/UDP tracker tests (slow, network-dependent).
+test-integration: dirs $(SLOW_TEST_BINS)
+	@for bin in $(SLOW_TEST_BINS); do \
+		echo "========== Running $$bin =========="; \
+		./$$bin || exit 1; \
+	done
+
+# `make test` — fast + integration. Does not run test_single_torrent (manual).
+test: test-fast test-integration
 
 clean:
 	rm -rf $(OBJ_DIR) $(OUT_DIR) $(LOG_DIR)

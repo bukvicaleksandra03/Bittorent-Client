@@ -139,9 +139,8 @@ class TCPClientSocket : public TCPDataSocket
     void connect_with_timeout(const Address& address, int timeout_ms);
 };
 
-// UDPSocket(fd, domain, destructor, move, sendto, recvfrom, local_address)
-// ├── UDPServerSocket(bind)
-// └── UDPClientSocket(connect)
+// UDPSocket(fd, domain, destructor, move, bind, connect, sendto, recvfrom,
+//           local_address)
 
 class UDPSocket
 {
@@ -149,6 +148,8 @@ class UDPSocket
     static const int s_socket_type = SOCK_DGRAM;
 
     UDPSocket() = delete;
+
+    explicit UDPSocket(int domain);
 
     // Delete copy to avoid double-close
     UDPSocket(const UDPSocket&) = delete;
@@ -158,11 +159,30 @@ class UDPSocket
     UDPSocket(UDPSocket&& other) noexcept;
     UDPSocket& operator=(UDPSocket&& other) noexcept;
 
-    virtual ~UDPSocket();
+    ~UDPSocket();
 
     int get_fd() const;
 
+    // Close the underlying fd and invalidate this socket.  Safe to call
+    // multiple times.  The destructor will not close again.
+    void close();
+
     static constexpr size_t MAX_UDP_PAYLOAD = 65507;
+
+    void bind(const Address& address);
+
+    // Records the given address as the socket's remote peer.
+    //
+    // On UDP, connect() does NOT send any packet and does NOT complete a
+    // handshake — it simply stores the destination in the kernel's socket
+    // state.  Two useful side-effects follow:
+    //   1. Subsequent send()/recv() calls may omit the address (the kernel
+    //      fills it in automatically).
+    //   2. The kernel performs a routing-table lookup to pick the outgoing
+    //      interface and source IP.  Once connect() returns, local_address()
+    //      will reveal that source IP — which is otherwise unknowable without
+    //      walking /proc/net/route manually.
+    void connect(const Address& address);
 
     std::pair<std::string, std::unique_ptr<Address>> recvfrom();
 
@@ -193,36 +213,7 @@ class UDPSocket
     void set_multicast_if(in_addr iface);
     void set_multicast_if(const std::string& iface_ip);
 
-   protected:
-    UDPSocket(int domain);
-
+   private:
     int s_sockfd = -1;
     int s_domain;  // AF_UNIX, AF_INET or AF_INET6
-};
-
-class UDPServerSocket : public UDPSocket
-{
-   public:
-    UDPServerSocket(int domain);
-
-    void bind(const Address& address);
-};
-
-class UDPClientSocket : public UDPSocket
-{
-   public:
-    UDPClientSocket(int domain);
-
-    // Records the given address as the socket's remote peer.
-    //
-    // On UDP, connect() does NOT send any packet and does NOT complete a
-    // handshake — it simply stores the destination in the kernel's socket
-    // state.  Two useful side-effects follow:
-    //   1. Subsequent send()/recv() calls may omit the address (the kernel
-    //      fills it in automatically).
-    //   2. The kernel performs a routing-table lookup to pick the outgoing
-    //      interface and source IP.  Once connect() returns, local_address()
-    //      will reveal that source IP — which is otherwise unknowable without
-    //      walking /proc/net/route manually.
-    void connect(const Address& address);
 };

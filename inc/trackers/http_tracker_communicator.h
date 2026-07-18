@@ -10,7 +10,7 @@ class HTTPTrackerCommunicator : public TrackerCommunicator
         : TrackerCommunicator(std::move(logger))
     {}
 
-    std::vector<Peer> announce(const TrackerDetails& tracker,
+    std::vector<PeerAddress> announce(const TrackerDetails& tracker,
                                const crypto::SHA1Hash& info_hash,
                                const utils::PeerId& my_peer_id,
                                uint64_t downloaded,

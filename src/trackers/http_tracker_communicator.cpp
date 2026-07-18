@@ -7,7 +7,7 @@
 #include "crypto.h"
 #include "logger.h"
 #include "net/ssl_socket.h"
-#include "peer.h"
+#include "peer_address.h"
 #include "trackers/tracker_details.h"
 #include "trackers/tracker_protocol.h"
 #include "utils.h"
@@ -114,10 +114,10 @@ static HttpResponse parse_http_response(const std::string& raw)
     return resp;
 }
 
-static std::vector<Peer> parse_tracker_response(
+static std::vector<PeerAddress> parse_tracker_response(
     const std::string& body, logger::Logger* log)
 {
-    BencodeParser parser(reinterpret_cast<const uint8_t*>(body.data()),
+    bencode::Parser parser(reinterpret_cast<const uint8_t*>(body.data()),
                          body.size());
     auto root = parser.parse_value();
 
@@ -137,7 +137,7 @@ static std::vector<Peer> parse_tracker_response(
                                 "s");
     }
 
-    std::vector<Peer> peers;
+    std::vector<PeerAddress> peers;
 
     if (!dict->has_key("peers"))
     {
@@ -162,7 +162,7 @@ static std::vector<Peer> parse_tracker_response(
         for (const auto& entry : peer_list->content)
         {
             BDict* pd = as<BDict>(entry.get());
-            Peer p;
+            PeerAddress p;
             p.ip = pd->get_val<BString>("ip")->content;
             p.port =
                 static_cast<uint16_t>(pd->get_val<BInteger>("port")->value);
@@ -180,7 +180,7 @@ static std::vector<Peer> parse_tracker_response(
     return peers;
 }
 
-std::vector<Peer> HTTPTrackerCommunicator::announce(
+std::vector<PeerAddress> HTTPTrackerCommunicator::announce(
     const TrackerDetails& tracker,
     const crypto::SHA1Hash& info_hash,
     const utils::PeerId& my_peer_id,

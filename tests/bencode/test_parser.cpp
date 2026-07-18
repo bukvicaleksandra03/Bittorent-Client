@@ -17,7 +17,7 @@ namespace fs = std::filesystem;
 // ---------------------------------------------------------------------------
 static std::shared_ptr<BType> parse_raw(const std::string& input)
 {
-    BencodeParser parser(input, true);
+    bencode::Parser parser(input, true);
     return parser.parse_value();
 }
 
@@ -297,7 +297,7 @@ TEST(BencodeTorrent, ParsesTorrentFile)
         GTEST_SKIP() << "Torrent file not found: " << TORRENT_FILE;
 
     std::string path{TORRENT_FILE};
-    BencodeParser parser(path);
+    bencode::Parser parser(path);
     std::unique_ptr<TorrentFile> tf;
     ASSERT_NO_THROW(tf = parser.parse());
     ASSERT_NE(tf, nullptr);
@@ -316,7 +316,7 @@ TEST(BencodeTorrent, PrintDoesNotThrow)
         GTEST_SKIP() << "Torrent file not found: " << TORRENT_FILE;
 
     std::string path{TORRENT_FILE};
-    BencodeParser parser(path);
+    bencode::Parser parser(path);
     auto tf = parser.parse();
 
     std::ostringstream oss;
@@ -331,7 +331,7 @@ TEST(BencodeTorrent, PrintDoesNotThrow)
 TEST(BencodeRawBytes, ParseFromUint8Pointer)
 {
     std::string input = "i100e";
-    BencodeParser parser(reinterpret_cast<const uint8_t*>(input.data()),
+    bencode::Parser parser(reinterpret_cast<const uint8_t*>(input.data()),
                          input.size());
     auto val = parser.parse_value();
     ASSERT_EQ(val->type(), BType::Type::Integer);
@@ -374,7 +374,7 @@ TEST(BencodeBatch, ParseAllTorrentsToFiles)
         const fs::path& torrent_path = entry.path();
         std::string path_str = torrent_path.string();
 
-        BencodeParser parser(path_str);
+        bencode::Parser parser(path_str);
         std::unique_ptr<TorrentFile> torrent;
         try
         {

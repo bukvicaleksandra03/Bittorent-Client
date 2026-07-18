@@ -21,7 +21,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
         : TrackerCommunicator(std::move(logger))
     {}
 
-    std::vector<Peer> announce(const TrackerDetails& tracker,
+    std::vector<PeerAddress> announce(const TrackerDetails& tracker,
                                const crypto::SHA1Hash& info_hash,
                                const utils::PeerId& my_peer_id,
                                uint64_t downloaded,
@@ -31,7 +31,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
                                uint16_t port) override;
 
    private:
-    std::vector<Peer> try_announce_to(const Address& addr,
+    std::vector<PeerAddress> try_announce_to(const Address& addr,
                                       const crypto::SHA1Hash& info_hash,
                                       const utils::PeerId& my_peer_id,
                                       uint64_t downloaded,
@@ -169,7 +169,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
         uint32_t interval;
         uint32_t leechers;
         uint32_t seeders;
-        std::vector<Peer> peers;
+        std::vector<PeerAddress> peers;
 
         static AnnounceResp deserialize(const uint8_t* data,
                                         size_t len,
@@ -191,7 +191,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
 
             for (size_t i = 0; i + stride <= peer_bytes; i += stride)
             {
-                Peer p;
+                PeerAddress p;
                 if (is_ipv6)
                 {
                     char buf[INET6_ADDRSTRLEN];

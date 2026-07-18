@@ -3,7 +3,7 @@
 #include <cctype>
 #include <fstream>
 
-BencodeParser::BencodeParser(const std::string& path)
+bencode::Parser::Parser(const std::string& path)
     : metadata_dict(std::make_shared<BDict>()), pos(0)
 {
     std::ifstream file(path, std::ios::binary);
@@ -17,24 +17,24 @@ BencodeParser::BencodeParser(const std::string& path)
     metadata.assign(buffer.begin(), buffer.end());
 }
 
-BencodeParser::BencodeParser(const uint8_t* data, size_t length)
+bencode::Parser::Parser(const uint8_t* data, size_t length)
     : metadata_dict(std::make_shared<BDict>()), pos(0)
 {
     metadata.assign(data, data + length);
 }
 
-BencodeParser::BencodeParser(const std::string& data, bool /*from_string*/)
+bencode::Parser::Parser(const std::string& data, bool /*from_string*/)
     : metadata_dict(std::make_shared<BDict>()), pos(0)
 {
     metadata.assign(data.begin(), data.end());
 }
 
-std::shared_ptr<BType> BencodeParser::parse_value()
+std::shared_ptr<BType> bencode::Parser::parse_value()
 {
     return parse_bencoding_type();
 }
 
-uint8_t BencodeParser::get()
+uint8_t bencode::Parser::get()
 {
     if (pos >= metadata.size())
         throw std::runtime_error("No more metadata left.");
@@ -42,12 +42,14 @@ uint8_t BencodeParser::get()
     return metadata[pos++];
 }
 
-uint8_t BencodeParser::peek() const
+uint8_t bencode::Parser::peek() const
 {
+    if (pos >= metadata.size())
+        throw std::runtime_error("No more metadata left (peek).");
     return metadata[pos];
 }
 
-std::unique_ptr<TorrentFile> BencodeParser::parse()
+std::unique_ptr<TorrentFile> bencode::Parser::parse()
 {
     if (get() != 'd')
         throw std::runtime_error(
@@ -75,7 +77,7 @@ std::unique_ptr<TorrentFile> BencodeParser::parse()
     return std::make_unique<TorrentFile>(metadata_dict, info_dict_raw_bytes);
 }
 
-std::shared_ptr<BString> BencodeParser::parse_byte_string()
+std::shared_ptr<BString> bencode::Parser::parse_byte_string()
 {
     size_t i = pos;
     for (; i < metadata.size(); i++)
@@ -107,7 +109,7 @@ std::shared_ptr<BString> BencodeParser::parse_byte_string()
     return b;
 }
 
-std::shared_ptr<BType> BencodeParser::parse_bencoding_type()
+std::shared_ptr<BType> bencode::Parser::parse_bencoding_type()
 {
     char nextChar = peek();
     switch (nextChar)
@@ -127,7 +129,7 @@ std::shared_ptr<BType> BencodeParser::parse_bencoding_type()
         "Unable to parse type at position: " + std::to_string(pos) + '.');
 }
 
-std::shared_ptr<BInteger> BencodeParser::parse_integer()
+std::shared_ptr<BInteger> bencode::Parser::parse_integer()
 {
     if (get() != 'i')
         throw std::runtime_error("Integer must start with 'i'");
@@ -152,7 +154,7 @@ std::shared_ptr<BInteger> BencodeParser::parse_integer()
     return bint;
 }
 
-std::shared_ptr<BList> BencodeParser::parse_list()
+std::shared_ptr<BList> bencode::Parser::parse_list()
 {
     if (get() != 'l')
         throw std::runtime_error("List must start with 'l'");
@@ -169,7 +171,7 @@ std::shared_ptr<BList> BencodeParser::parse_list()
     return blist;
 }
 
-std::shared_ptr<BDict> BencodeParser::parse_dictionary()
+std::shared_ptr<BDict> bencode::Parser::parse_dictionary()
 {
     if (get() != 'd')
         throw std::runtime_error("Dictionary must start with 'd'");

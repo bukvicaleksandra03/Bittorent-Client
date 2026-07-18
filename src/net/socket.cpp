@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -37,8 +38,8 @@ std::vector<std::unique_ptr<Address>> dns_lookup(const std::string& hostname,
 
     if (status != 0)
     {
-        throw std::runtime_error("getaddrinfo() failed for " + hostname +
-                                 ":" + port + ": " + gai_strerror(status));
+        throw std::runtime_error("getaddrinfo() failed for " + hostname + ":" +
+                                 port + ": " + gai_strerror(status));
     }
 
     std::vector<std::unique_ptr<Address>> addresses;
@@ -110,11 +111,11 @@ static void poll_or_throw(int fd,
 
     int ret = poll(&pfd, 1, timeout_ms);
     if (ret < 0)
-        throw std::runtime_error(std::string(op_name) + " poll() failed: " +
-                      strerror(errno));
+        throw std::runtime_error(std::string(op_name) +
+                                 " poll() failed: " + strerror(errno));
     if (ret == 0)
         throw std::runtime_error(std::string(op_name) + " timed out after " +
-                      std::to_string(timeout_ms) + "ms");
+                                 std::to_string(timeout_ms) + "ms");
 }
 
 TCPSocket::~TCPSocket()
@@ -137,7 +138,7 @@ void TCPDataSocket::send(const char* buffer, size_t size)
         ssize_t n = ::send(s_sockfd, buffer + total_sent, size - total_sent, 0);
         if (n <= 0)
             throw std::runtime_error("send() failed: " +
-                          std::string(strerror(errno)));
+                                     std::string(strerror(errno)));
         total_sent += static_cast<size_t>(n);
     }
 }
@@ -153,19 +154,20 @@ void TCPDataSocket::send_with_timeout(const char* buffer,
     while (total_sent < size)
     {
         int remaining_ms = static_cast<int>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - clock::now()).count());
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
+                                                                  clock::now())
+                .count());
 
         if (remaining_ms <= 0)
             throw std::runtime_error("send() timed out after " +
-                          std::to_string(timeout_ms) + "ms");
+                                     std::to_string(timeout_ms) + "ms");
 
         poll_or_throw(s_sockfd, POLLOUT, remaining_ms, "send()");
 
         ssize_t n = ::send(s_sockfd, buffer + total_sent, size - total_sent, 0);
         if (n <= 0)
             throw std::runtime_error("send() failed: " +
-                          std::string(strerror(errno)));
+                                     std::string(strerror(errno)));
         total_sent += static_cast<size_t>(n);
     }
 }
@@ -186,7 +188,8 @@ ssize_t TCPDataSocket::recv_with_timeout(void* buffer,
 
     ssize_t bytes_recv = ::recv(s_sockfd, buffer, size, 0);
     if (bytes_recv < 0)
-        throw std::runtime_error("recv() failed: " + std::string(strerror(errno)));
+        throw std::runtime_error("recv() failed: " +
+                                 std::string(strerror(errno)));
     return bytes_recv;
 }
 
@@ -215,12 +218,13 @@ std::string TCPDataSocket::recv_all_with_timeout(int timeout_ms)
     while (true)
     {
         int remaining_ms = static_cast<int>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - clock::now()).count());
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
+                                                                  clock::now())
+                .count());
 
         if (remaining_ms <= 0)
             throw std::runtime_error("recv_all() timed out after " +
-                          std::to_string(timeout_ms) + "ms");
+                                     std::to_string(timeout_ms) + "ms");
 
         ssize_t bytes_read =
             recv_with_timeout(buffer, sizeof(buffer), remaining_ms);
@@ -258,16 +262,16 @@ void TCPDataSocket::recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms)
     while (total < n)
     {
         const int remaining_ms = static_cast<int>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - clock::now())
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
+                                                                  clock::now())
                 .count());
 
         if (remaining_ms <= 0)
         {
-            throw std::runtime_error(
-                "recv_exact_timeout: timed out after " +
-                std::to_string(timeout_ms) + "ms (" + std::to_string(total) +
-                "/" + std::to_string(n) + " bytes received)");
+            throw std::runtime_error("recv_exact_timeout: timed out after " +
+                                     std::to_string(timeout_ms) + "ms (" +
+                                     std::to_string(total) + "/" +
+                                     std::to_string(n) + " bytes received)");
         }
 
         ssize_t got = recv_with_timeout(buf + total, n - total, remaining_ms);
@@ -292,7 +296,7 @@ TCPServerSocket::TCPServerSocket(int domain) : TCPSocket(domain)
     int opt = 1;
     if (::setsockopt(s_sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
         throw std::runtime_error("setsockopt(SO_REUSEADDR) failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
 }
 
 TCPServerSocket::TCPServerSocket(TCPServerSocket&& other) noexcept
@@ -346,7 +350,8 @@ TCPAcceptSocket TCPServerSocket::accept()
 
     if (fd < 0)
     {
-        throw std::runtime_error("accept() failed: " + std::string(strerror(errno)));
+        throw std::runtime_error("accept() failed: " +
+                                 std::string(strerror(errno)));
     }
 
     return TCPAcceptSocket(s_domain, fd);
@@ -368,7 +373,8 @@ void TCPClientSocket::connect(const Address& address)
             "You are trying to connect to an address of wrong domain.");
 
     if (::connect(s_sockfd, address.sockaddr_ptr(), address.size()) < 0)
-        throw std::runtime_error("connect() failed: " + std::string(strerror(errno)));
+        throw std::runtime_error("connect() failed: " +
+                                 std::string(strerror(errno)));
 }
 
 void TCPClientSocket::connect_with_timeout(const Address& address,
@@ -382,11 +388,11 @@ void TCPClientSocket::connect_with_timeout(const Address& address,
     int flags = fcntl(s_sockfd, F_GETFL, 0);
     if (flags < 0)
         throw std::runtime_error("fcntl(F_GETFL) failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
 
     if (fcntl(s_sockfd, F_SETFL, flags | O_NONBLOCK) < 0)
         throw std::runtime_error("fcntl(F_SETFL) failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
 
     // Step 2: Initiate connect (returns immediately on non-blocking socket)
     int ret = ::connect(s_sockfd, address.sockaddr_ptr(), address.size());
@@ -395,7 +401,8 @@ void TCPClientSocket::connect_with_timeout(const Address& address,
     {
         // Restore blocking mode before throwing
         fcntl(s_sockfd, F_SETFL, flags);
-        throw std::runtime_error("connect() failed: " + std::string(strerror(errno)));
+        throw std::runtime_error("connect() failed: " +
+                                 std::string(strerror(errno)));
     }
 
     if (ret == 0)
@@ -415,7 +422,8 @@ void TCPClientSocket::connect_with_timeout(const Address& address,
     if (poll_ret < 0)
     {
         fcntl(s_sockfd, F_SETFL, flags);
-        throw std::runtime_error("poll() failed: " + std::string(strerror(errno)));
+        throw std::runtime_error("poll() failed: " +
+                                 std::string(strerror(errno)));
     }
 
     if (poll_ret == 0)
@@ -423,7 +431,7 @@ void TCPClientSocket::connect_with_timeout(const Address& address,
         // Timed out
         fcntl(s_sockfd, F_SETFL, flags);
         throw std::runtime_error("connect() timed out after " +
-                      std::to_string(timeout_ms) + "ms");
+                                 std::to_string(timeout_ms) + "ms");
     }
 
     // Step 4: Check if the connection actually succeeded
@@ -433,7 +441,7 @@ void TCPClientSocket::connect_with_timeout(const Address& address,
     {
         fcntl(s_sockfd, F_SETFL, flags);
         throw std::runtime_error("getsockopt(SO_ERROR) failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
     }
 
     // Step 5: Restore blocking mode
@@ -441,7 +449,8 @@ void TCPClientSocket::connect_with_timeout(const Address& address,
 
     if (so_error != 0)
     {
-        throw std::runtime_error("connect() failed: " + std::string(strerror(so_error)));
+        throw std::runtime_error("connect() failed: " +
+                                 std::string(strerror(so_error)));
     }
 }
 
@@ -473,6 +482,15 @@ UDPSocket::~UDPSocket()
 int UDPSocket::get_fd() const
 {
     return s_sockfd;
+}
+
+void UDPSocket::close()
+{
+    if (s_sockfd != -1)
+    {
+        ::close(s_sockfd);
+        s_sockfd = -1;
+    }
 }
 
 UDPSocket::UDPSocket(UDPSocket&& other) noexcept
@@ -511,7 +529,7 @@ std::pair<std::string, std::unique_ptr<Address>> UDPSocket::recvfrom()
                                     &len);
     if (bytes_recv < 0)
         throw std::runtime_error("recvfrom() failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
 
     std::string message(buffer, static_cast<size_t>(bytes_recv));
 
@@ -527,8 +545,8 @@ std::pair<std::string, std::unique_ptr<Address>> UDPSocket::recvfrom()
     return {std::move(message), std::move(src_address)};
 }
 
-std::pair<std::string, std::unique_ptr<Address>> UDPSocket::recvfrom_with_timeout(
-    int timeout_ms)
+std::pair<std::string, std::unique_ptr<Address>>
+UDPSocket::recvfrom_with_timeout(int timeout_ms)
 {
     poll_or_throw(s_sockfd, POLLIN, timeout_ms, "recvfrom_with_timeout");
     return recvfrom();
@@ -544,28 +562,37 @@ void UDPSocket::sendto(const std::string& message, const Address& dst_address)
                                   dst_address.size());
     if (bytes_sent < 0)
         throw std::runtime_error("sendto() failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
 }
+
+namespace {
+
+// getsockname() must receive a buffer sized for the socket's address family;
+// sockaddr_in6 is larger than the generic sockaddr struct.
+template <typename SockaddrT>
+SockaddrT get_bound_address_for_family(int sockfd)
+{
+    SockaddrT addr{};
+    socklen_t len = sizeof(addr);
+    if (::getsockname(sockfd, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
+        throw std::runtime_error("getsockname() failed: " +
+                                 std::string(strerror(errno)));
+    return addr;
+}
+
+}  // namespace
 
 std::unique_ptr<Address> UDPSocket::local_address() const
 {
     if (s_domain == AF_INET)
     {
-        sockaddr_in addr{};
-        socklen_t len = sizeof(addr);
-        if (::getsockname(s_sockfd, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
-            throw std::runtime_error("getsockname() failed: " +
-                          std::string(strerror(errno)));
+        const sockaddr_in addr = get_bound_address_for_family<sockaddr_in>(s_sockfd);
         return std::make_unique<IPv4Address>(
             reinterpret_cast<const sockaddr*>(&addr));
     }
-    else if (s_domain == AF_INET6)
+    if (s_domain == AF_INET6)
     {
-        sockaddr_in6 addr{};
-        socklen_t len = sizeof(addr);
-        if (::getsockname(s_sockfd, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
-            throw std::runtime_error("getsockname() failed: " +
-                          std::string(strerror(errno)));
+        const sockaddr_in6 addr = get_bound_address_for_family<sockaddr_in6>(s_sockfd);
         return std::make_unique<IPv6Address>(
             reinterpret_cast<const sockaddr*>(&addr));
     }
@@ -575,41 +602,34 @@ std::unique_ptr<Address> UDPSocket::local_address() const
 void UDPSocket::set_multicast_ttl(int ttl)
 {
     if (s_domain != AF_INET)
-        return; // silently ignored for non-IPv4 sockets
+        return;  // silently ignored for non-IPv4 sockets
     u_char val = static_cast<u_char>(ttl);
-    if (::setsockopt(s_sockfd, IPPROTO_IP, IP_MULTICAST_TTL, &val, sizeof(val)) < 0)
+    if (::setsockopt(
+            s_sockfd, IPPROTO_IP, IP_MULTICAST_TTL, &val, sizeof(val)) < 0)
         throw std::runtime_error("setsockopt(IP_MULTICAST_TTL) failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
 }
 
 void UDPSocket::set_multicast_if(in_addr iface)
 {
     if (s_domain != AF_INET)
-        return; // silently ignored for non-IPv4 sockets
-    if (::setsockopt(s_sockfd, IPPROTO_IP, IP_MULTICAST_IF, &iface, sizeof(iface)) < 0)
+        return;  // silently ignored for non-IPv4 sockets
+    if (::setsockopt(
+            s_sockfd, IPPROTO_IP, IP_MULTICAST_IF, &iface, sizeof(iface)) < 0)
         throw std::runtime_error("setsockopt(IP_MULTICAST_IF) failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
 }
 
 void UDPSocket::set_multicast_if(const std::string& iface_ip)
 {
     in_addr addr{};
     if (::inet_aton(iface_ip.c_str(), &addr) == 0)
-        throw std::runtime_error("set_multicast_if: invalid IP address: " + iface_ip);
+        throw std::runtime_error("set_multicast_if: invalid IP address: " +
+                                 iface_ip);
     set_multicast_if(addr);
 }
 
-UDPServerSocket::UDPServerSocket(int domain) : UDPSocket(domain)
-{
-    // Allow re-binding to a port that is still in TIME_WAIT from a previous
-    // run, so a quick restart does not fail with EADDRINUSE.
-    int opt = 1;
-    if (::setsockopt(s_sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
-        throw std::runtime_error("setsockopt(SO_REUSEADDR) failed: " +
-                      std::string(strerror(errno)));
-}
-
-void UDPServerSocket::bind(const Address& address)
+void UDPSocket::bind(const Address& address)
 {
     if (address.domain() != s_domain)
     {
@@ -617,15 +637,20 @@ void UDPServerSocket::bind(const Address& address)
             "You are trying to bind to an address of wrong domain.");
     }
 
+    // Allow re-binding to a port that is still in TIME_WAIT from a previous
+    // run, so a quick restart does not fail with EADDRINUSE.
+    int opt = 1;
+    if (::setsockopt(s_sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+        throw std::runtime_error("setsockopt(SO_REUSEADDR) failed: " +
+                                 std::string(strerror(errno)));
+
     if (::bind(s_sockfd, address.sockaddr_ptr(), address.size()) < 0)
     {
         throw std::runtime_error("bind() failed");
     }
 }
 
-UDPClientSocket::UDPClientSocket(int domain) : UDPSocket(domain) {}
-
-void UDPClientSocket::connect(const Address& address)
+void UDPSocket::connect(const Address& address)
 {
     if (address.domain() != s_domain)
         throw std::runtime_error(
@@ -633,5 +658,5 @@ void UDPClientSocket::connect(const Address& address)
 
     if (::connect(s_sockfd, address.sockaddr_ptr(), address.size()) < 0)
         throw std::runtime_error("connect() failed: " +
-                      std::string(strerror(errno)));
+                                 std::string(strerror(errno)));
 }

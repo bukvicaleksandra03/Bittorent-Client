@@ -22,7 +22,7 @@ static bool poll_readable(int fd, int timeout_ms)
     return ret > 0 && (pfd.revents & POLLIN);
 }
 
-std::vector<Peer> UDPTrackerCommunicator::announce(
+std::vector<PeerAddress> UDPTrackerCommunicator::announce(
     const TrackerDetails& tracker,
     const crypto::SHA1Hash& info_hash,
     const utils::PeerId& my_peer_id,
@@ -82,7 +82,7 @@ std::vector<Peer> UDPTrackerCommunicator::announce(
         tracker.hostname + ": " + last_error);
 }
 
-std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
+std::vector<PeerAddress> UDPTrackerCommunicator::try_announce_to(
     const Address& tracker_addr,
     const crypto::SHA1Hash& info_hash,
     const utils::PeerId& my_peer_id,
@@ -93,7 +93,7 @@ std::vector<Peer> UDPTrackerCommunicator::try_announce_to(
     uint16_t port)
 {
     bool is_ipv6 = tracker_addr.domain() == AF_INET6;
-    UDPClientSocket sock(tracker_addr.domain());
+    UDPSocket sock(tracker_addr.domain());
 
     logger::Logger* log = m_logger.get();
 

@@ -16,7 +16,7 @@
 // Construction
 // ---------------------------------------------------------------------------
 
-PeerConnection::PeerConnection(Peer peer,
+PeerConnection::PeerConnection(PeerAddress peer,
                                crypto::SHA1Hash info_hash,
                                utils::PeerId my_peer_id,
                                PieceManager& piece_manager,

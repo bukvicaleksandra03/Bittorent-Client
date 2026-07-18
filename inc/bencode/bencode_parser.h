@@ -8,15 +8,18 @@
 #include "bencode/bencode_types.h"
 #include "torrent_file.h"
 
-class BencodeParser
+namespace bencode
+{
+
+class Parser
 {
    public:
     // Construct from file path
-    explicit BencodeParser(const std::string& path);
+    explicit Parser(const std::string& path);
 
     // Construct from raw data (for parsing tracker responses)
-    BencodeParser(const uint8_t* data, size_t length);
-    BencodeParser(const std::string& data, bool from_string);
+    Parser(const uint8_t* data, size_t length);
+    Parser(const std::string& data, bool from_string);
 
     // Parse as TorrentFile (for .torrent files)
     std::unique_ptr<TorrentFile> parse();
@@ -48,3 +51,5 @@ class BencodeParser
 
     std::shared_ptr<BDict> parse_dictionary();
 };
+
+}  // namespace bencode

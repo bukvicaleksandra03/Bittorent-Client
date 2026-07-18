@@ -73,7 +73,17 @@ TorrentManager::TorrentManager(std::unique_ptr<TorrentFile> torrent,
         (log_dir / (sanitize_filename(m_torrent->get_name()) + ".log"))
             .string());
 
+    m_krpc_logger = std::make_shared<logger::Logger>();
+    m_krpc_logger->set_level(log_level);
+    m_krpc_logger->set_prefix("[" + m_torrent->get_name() + "] KRPC ");
+    m_krpc_logger->set_file((log_dir / "dht.log").string());
+
     m_piece_manager.set_logger(m_logger);
+}
+
+std::shared_ptr<logger::Logger> TorrentManager::krpc_logger() const
+{
+    return m_krpc_logger;
 }
 
 void TorrentManager::start()
@@ -91,7 +101,7 @@ void TorrentManager::start()
     m_disk_writer.preallocate_files();
     announce(TrackerEvent::Started);
 
-    std::vector<Peer> peers =
+    std::vector<PeerAddress> peers =
         m_tracker->announce(m_torrent->get_tracker(),
                             m_torrent->get_info_hash(),
                             m_peer_id,
@@ -149,7 +159,7 @@ void TorrentManager::run_peer_worker(size_t peer_index)
 {
     m_peer_workers_started.fetch_add(1, std::memory_order_relaxed);
 
-    const Peer& peer = m_all_peers[peer_index];
+    const PeerAddress& peer = m_all_peers[peer_index];
 
     // Each PeerConnection gets its own Logger with its own mutex and its own
     // log file. Peer threads therefore never contend on a shared log lock,
@@ -320,8 +330,10 @@ std::vector<TorrentManager::PeerStat> TorrentManager::top_peers(size_t n) const
             stats.push_back({conn->peer_address(), conn->bytes_downloaded()});
         }
     }
-    std::sort(stats.begin(), stats.end(),
-              [](const PeerStat& a, const PeerStat& b) { return a.bytes > b.bytes; });
+    std::sort(stats.begin(),
+              stats.end(),
+              [](const PeerStat& a, const PeerStat& b)
+              { return a.bytes > b.bytes; });
     if (stats.size() > n)
     {
         stats.resize(n);
@@ -346,8 +358,10 @@ std::vector<TorrentManager::PeerStat> TorrentManager::top_upload_peers(
             }
         }
     }
-    std::sort(stats.begin(), stats.end(),
-              [](const PeerStat& a, const PeerStat& b) { return a.bytes > b.bytes; });
+    std::sort(stats.begin(),
+              stats.end(),
+              [](const PeerStat& a, const PeerStat& b)
+              { return a.bytes > b.bytes; });
     if (stats.size() > n)
     {
         stats.resize(n);
@@ -436,4 +450,30 @@ void TorrentManager::announce(TrackerEvent event)
 const std::string& TorrentManager::torrent_name() const
 {
     return m_torrent->get_name();
+}
+
+void TorrentManager::add_dht_peer(const PeerAddress& peer)
+{
+    std::lock_guard<std::mutex> lock(m_spawn_mu);
+    // Skip duplicates already in the pool.
+    for (const auto& p : m_all_peers)
+    {
+        if (p.ip == peer.ip && p.port == peer.port)
+        {
+            return;
+        }
+    }
+    m_all_peers.push_back(peer);
+    spawn_peers_locked();
+}
+
+std::string TorrentManager::info_hash_str() const
+{
+    const auto& h = m_torrent->get_info_hash();
+    return std::string(reinterpret_cast<const char*>(h.data()), h.size());
+}
+
+std::string TorrentManager::info_hash_hex() const
+{
+    return m_torrent->get_info_hash_hex();
 }

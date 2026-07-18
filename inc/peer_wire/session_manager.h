@@ -12,6 +12,11 @@
 
 #include "net/upnp.h"
 
+namespace dht
+{
+class DhtNode;
+}
+
 class TorrentManager;
 
 // Owns multiple TorrentManager instances, coordinates start/stop, and prints
@@ -25,10 +30,7 @@ class SessionManager
     // listen_port is the single TCP port used by *all* torrents in this session.
     // A single UPnP mapping is attempted at startup and kept alive for the whole
     // session lifetime; released when the SessionManager is destroyed.
-    explicit SessionManager(uint16_t listen_port = 6881)
-        : m_listen_port(listen_port)
-    {
-    }
+    explicit SessionManager(uint16_t listen_port = 6881);
 
     SessionManager(const SessionManager&) = delete;
     SessionManager& operator=(const SessionManager&) = delete;
@@ -83,4 +85,7 @@ class SessionManager
     // Kept alive until the SessionManager is destroyed.
     uint16_t m_listen_port{6881};
     std::optional<UPnPPortMapping> m_upnp_mapping;
+
+    // DHT node — one per session, shared across all torrents.
+    std::unique_ptr<dht::DhtNode> m_dht_node;
 };

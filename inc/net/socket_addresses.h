@@ -128,10 +128,16 @@ class IPv4Address : public Address
     }
 
     // Returns the dotted-decimal IP string, e.g. "192.168.1.1".
-    std::string ip() const { return addrStr; }
+    std::string ip() const
+    {
+        return addrStr;
+    }
 
     // Returns the port number in host byte order.
-    uint16_t port() const { return ntohs(addr.sin_port); }
+    uint16_t port() const
+    {
+        return ntohs(addr.sin_port);
+    }
 
     const sockaddr* sockaddr_ptr() const
     {

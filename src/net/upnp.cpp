@@ -233,7 +233,7 @@ static std::string ssdp_discover(int total_ms)
               << ", gateway: " << (gw_ip.empty() ? "(none)" : gw_ip)
               << "\n";
 
-    UDPServerSocket sock(AF_INET);
+    UDPSocket sock(AF_INET);
     // TTL 4: conventional for SSDP; 1 would suffice on a LAN but 4 is safer.
     sock.set_multicast_ttl(4);
     if (!local_ip.empty())
@@ -586,7 +586,7 @@ static std::string local_ip_for(const std::string& gateway_host)
         // Connect a throwaway UDP socket to the gateway; the kernel fills in
         // the source address without sending any packet, telling us which
         // interface we route through.
-        UDPClientSocket sock(AF_INET);
+        UDPSocket sock(AF_INET);
         IPv4Address dest(gateway_host, 1900);
         sock.connect(dest);
         auto local = sock.local_address();

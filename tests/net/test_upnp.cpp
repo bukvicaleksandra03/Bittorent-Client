@@ -6,7 +6,7 @@
 // When no UPnP gateway is present on the LAN the tests skip gracefully
 // via GTEST_SKIP() instead of failing.
 //
-// Run with:  make test   (or ./build/test_upnp directly)
+// Run with:  make test-integration   (or ./out/test_upnp directly)
 
 #include <gtest/gtest.h>
 

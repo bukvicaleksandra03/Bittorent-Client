@@ -1,8 +1,10 @@
 // Integration test: downloads a real torrent (long-running, uses network and
 // disk).
 //
-// Not run by default (skipped) so `make test` stays fast. Enable with:
+// Not run by `make test-fast` or `make test-integration`. Build with
+// `make test_single_torrent`, then enable with:
 //   RUN_SINGLE_TORRENT_TEST=1 ./out/test_single_torrent
+// or use ./download_torrent.sh
 //
 // Optional environment:
 //   TORRENT_PATH           Path to .torrent
@@ -179,7 +181,7 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
     // TorrentManager under <log_dir>/<name>.log (and peer variants).
     // The log level can be tuned here by changing the Level argument below.
 
-    BencodeParser parser(torrent_path);
+    bencode::Parser parser(torrent_path);
     std::unique_ptr<TorrentFile> torrent = parser.parse();
     ASSERT_NE(torrent, nullptr) << "Failed to parse torrent";
 
