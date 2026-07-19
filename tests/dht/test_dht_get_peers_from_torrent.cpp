@@ -14,8 +14,9 @@
 //     --gtest_filter='DhtPeerDiscovery.GetPeersFromRealTorrentLong'
 //
 // Optional environment:
-//   TORRENT_PATH                 Path to a .torrent file (default: Ubuntu desktop)
-//   DHT_PEER_LOOKUP_TIMEOUT_SEC  Lookup window in seconds (quick default: 60,
+//   TORRENT_PATH                 Path to a .torrent file (default: Ubuntu
+//   desktop) DHT_PEER_LOOKUP_TIMEOUT_SEC  Lookup window in seconds (quick
+//   default: 60,
 //                                long default: 120)
 //
 // The long test writes KRPC traffic to logs/<sanitized-torrent-name>/dht.log
@@ -29,8 +30,8 @@
 
 #include <gtest/gtest.h>
 
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -112,7 +113,8 @@ struct PeerEndpoint
     }
 };
 
-std::chrono::seconds lookup_timeout_from_env(std::chrono::seconds default_timeout)
+std::chrono::seconds lookup_timeout_from_env(
+    std::chrono::seconds default_timeout)
 {
     const char* env = std::getenv("DHT_PEER_LOOKUP_TIMEOUT_SEC");
     if (!env || !*env)
@@ -139,7 +141,7 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
     {
         auto krpc_logger = std::make_shared<logger::Logger>();
         krpc_logger->set_level(logger::Level::INFO);
-        krpc_logger->set_prefix("[" + torrent_name + "] KRPC ");
+        krpc_logger->set_prefix(" KRPC ");
         const fs::path log_dir =
             project_root() / "logs" / sanitize_filename(torrent_name);
         fs::create_directories(log_dir);
@@ -152,8 +154,10 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
     }
 
     node.set_peer_callback(
-        [&](const std::string& /*info_hash_hex*/, const std::string& ip,
-            uint16_t port) {
+        [&](const std::string& /*info_hash_hex*/,
+            const std::string& ip,
+            uint16_t port)
+        {
             std::lock_guard<std::mutex> lock(peers_mutex);
             peers.insert(PeerEndpoint{ip, port});
         });
@@ -187,10 +191,11 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
             std::lock_guard<std::mutex> lock(peers_mutex);
             if (peers.size() != last_reported)
             {
-                const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::steady_clock::now() - started);
-                std::cout << "[long] " << elapsed.count() << "s: "
-                          << peers.size() << " peer(s) so far\n";
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now() - started);
+                std::cout << "[long] " << elapsed.count()
+                          << "s: " << peers.size() << " peer(s) so far\n";
                 last_reported = peers.size();
             }
         }
@@ -204,15 +209,17 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
     return peers;
 }
 
-void print_peers(const TorrentFile& torrent, const std::set<PeerEndpoint>& peers)
+void print_peers(const TorrentFile& torrent,
+                 const std::set<PeerEndpoint>& peers)
 {
-    std::cout << "Discovered " << peers.size()
-              << " peer(s) for " << torrent.get_info_hash_hex() << ":\n";
+    std::cout << "Discovered " << peers.size() << " peer(s) for "
+              << torrent.get_info_hash_hex() << ":\n";
     for (const auto& peer : peers)
         std::cout << "  " << peer.ip << ":" << peer.port << '\n';
 }
 
-std::unique_ptr<TorrentFile> load_torrent_or_null(const std::string& torrent_path)
+std::unique_ptr<TorrentFile> load_torrent_or_null(
+    const std::string& torrent_path)
 {
     if (!fs::is_regular_file(torrent_path))
         return nullptr;
@@ -227,8 +234,9 @@ TEST(DhtPeerDiscovery, GetPeersFromRealTorrent)
 {
     if (!std::getenv("RUN_DHT_PEER_DISCOVERY_TEST"))
     {
-        GTEST_SKIP() << "Set RUN_DHT_PEER_DISCOVERY_TEST=1 to run live DHT peer "
-                        "discovery (network-dependent).";
+        GTEST_SKIP()
+            << "Set RUN_DHT_PEER_DISCOVERY_TEST=1 to run live DHT peer "
+               "discovery (network-dependent).";
     }
 
     const char* torrent_env = std::getenv("TORRENT_PATH");
@@ -236,15 +244,18 @@ TEST(DhtPeerDiscovery, GetPeersFromRealTorrent)
         torrent_env ? torrent_env : default_torrent_path();
 
     auto torrent = load_torrent_or_null(torrent_path);
-    ASSERT_NE(torrent, nullptr) << "torrent not found or invalid: " << torrent_path;
+    ASSERT_NE(torrent, nullptr)
+        << "torrent not found or invalid: " << torrent_path;
 
     const std::string info_hash = info_hash_20(*torrent);
     ASSERT_EQ(info_hash.size(), 20u);
 
-    const auto peers = discover_peers(
-        info_hash, torrent->get_name(),
-        lookup_timeout_from_env(std::chrono::seconds(60)),
-        /*stop_on_first_peer=*/true, /*log_progress=*/false);
+    const auto peers =
+        discover_peers(info_hash,
+                       torrent->get_name(),
+                       lookup_timeout_from_env(std::chrono::seconds(60)),
+                       /*stop_on_first_peer=*/true,
+                       /*log_progress=*/false);
 
     if (peers.empty())
     {
@@ -262,8 +273,9 @@ TEST(DhtPeerDiscovery, GetPeersFromRealTorrentLong)
 {
     if (!std::getenv("RUN_DHT_PEER_DISCOVERY_LONG_TEST"))
     {
-        GTEST_SKIP() << "Set RUN_DHT_PEER_DISCOVERY_LONG_TEST=1 to run the full "
-                        "window DHT peer discovery test (network-dependent).";
+        GTEST_SKIP()
+            << "Set RUN_DHT_PEER_DISCOVERY_LONG_TEST=1 to run the full "
+               "window DHT peer discovery test (network-dependent).";
     }
 
     const char* torrent_env = std::getenv("TORRENT_PATH");
@@ -271,25 +283,28 @@ TEST(DhtPeerDiscovery, GetPeersFromRealTorrentLong)
         torrent_env ? torrent_env : default_torrent_path();
 
     auto torrent = load_torrent_or_null(torrent_path);
-    ASSERT_NE(torrent, nullptr) << "torrent not found or invalid: " << torrent_path;
+    ASSERT_NE(torrent, nullptr)
+        << "torrent not found or invalid: " << torrent_path;
 
     const std::string info_hash = info_hash_20(*torrent);
     ASSERT_EQ(info_hash.size(), 20u);
 
     const auto lookup_timeout =
         lookup_timeout_from_env(std::chrono::seconds(120));
-    std::cout << "Long lookup for " << torrent->get_info_hash_hex()
-              << " (" << lookup_timeout.count() << "s window)\n";
+    std::cout << "Long lookup for " << torrent->get_info_hash_hex() << " ("
+              << lookup_timeout.count() << "s window)\n";
 
-    const auto peers = discover_peers(
-        info_hash, torrent->get_name(), lookup_timeout,
-        /*stop_on_first_peer=*/false, /*log_progress=*/true);
+    const auto peers = discover_peers(info_hash,
+                                      torrent->get_name(),
+                                      lookup_timeout,
+                                      /*stop_on_first_peer=*/false,
+                                      /*log_progress=*/true);
 
     if (peers.empty())
     {
         GTEST_SKIP() << "No peers returned for info hash "
-                     << torrent->get_info_hash_hex()
-                     << " within " << lookup_timeout.count()
+                     << torrent->get_info_hash_hex() << " within "
+                     << lookup_timeout.count()
                      << "s (swarm may be quiet or lookup incomplete).";
     }
 

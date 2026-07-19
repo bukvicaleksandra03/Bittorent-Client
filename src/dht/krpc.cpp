@@ -1,15 +1,16 @@
 #include "dht/krpc.h"
 
-#include "bencode/bencode_encoder.h"
-#include "bencode/bencode_types.h"
-#include "bencode/bencode_parser.h"
-
 #include <cstring>
 #include <iomanip>
 #include <map>
 #include <random>
 #include <sstream>
 #include <stdexcept>
+
+#include "bencode/bencode_encoder.h"
+#include "bencode/bencode_parser.h"
+#include "bencode/bencode_types.h"
+#include "peer_address.h"
 
 namespace dht
 {
@@ -20,80 +21,65 @@ namespace dht
 
 std::string make_ping(const std::string& txn, const NodeId& self_id)
 {
-    std::string args = bencode::dict({
-        {"id", bencode::string(self_id.to_string())}
-    });
-    return bencode::dict({
-        {"a", args},
-        {"q", bencode::string("ping")},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("q")}
-    });
+    std::string args =
+        bencode::dict({{"id", bencode::string(self_id.to_string())}});
+    return bencode::dict({{"a", args},
+                          {"q", bencode::string("ping")},
+                          {"t", bencode::string(txn)},
+                          {"y", bencode::string("q")}});
 }
 
 std::string make_find_node(const std::string& txn,
-                            const NodeId& self_id,
-                            const NodeId& target)
+                           const NodeId& self_id,
+                           const NodeId& target)
 {
-    std::string args = bencode::dict({
-        {"id",     bencode::string(self_id.to_string())},
-        {"target", bencode::string(target.to_string())}
-    });
-    return bencode::dict({
-        {"a", args},
-        {"q", bencode::string("find_node")},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("q")}
-    });
+    std::string args =
+        bencode::dict({{"id", bencode::string(self_id.to_string())},
+                       {"target", bencode::string(target.to_string())}});
+    return bencode::dict({{"a", args},
+                          {"q", bencode::string("find_node")},
+                          {"t", bencode::string(txn)},
+                          {"y", bencode::string("q")}});
 }
 
 std::string make_get_peers(const std::string& txn,
-                            const NodeId& self_id,
-                            const std::string& info_hash_20)
+                           const NodeId& self_id,
+                           const std::string& info_hash_20)
 {
-    std::string args = bencode::dict({
-        {"id",        bencode::string(self_id.to_string())},
-        {"info_hash", bencode::string(info_hash_20)}
-    });
-    return bencode::dict({
-        {"a", args},
-        {"q", bencode::string("get_peers")},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("q")}
-    });
+    std::string args =
+        bencode::dict({{"id", bencode::string(self_id.to_string())},
+                       {"info_hash", bencode::string(info_hash_20)}});
+    return bencode::dict({{"a", args},
+                          {"q", bencode::string("get_peers")},
+                          {"t", bencode::string(txn)},
+                          {"y", bencode::string("q")}});
 }
 
 std::string make_announce_peer(const std::string& txn,
-                                const NodeId& self_id,
-                                const std::string& info_hash_20,
-                                uint16_t port,
-                                const std::string& token,
-                                bool implied_port)
+                               const NodeId& self_id,
+                               const std::string& info_hash_20,
+                               uint16_t port,
+                               const std::string& token,
+                               bool implied_port)
 {
     std::map<std::string, std::string> a_map;
-    a_map["id"]            = bencode::string(self_id.to_string());
-    a_map["implied_port"]  = bencode::integer(implied_port ? 1 : 0);
-    a_map["info_hash"]     = bencode::string(info_hash_20);
-    a_map["port"]          = bencode::integer(port);
-    a_map["token"]         = bencode::string(token);
-    return bencode::dict({
-        {"a", bencode::dict(a_map)},
-        {"q", bencode::string("announce_peer")},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("q")}
-    });
+    a_map["id"] = bencode::string(self_id.to_string());
+    a_map["implied_port"] = bencode::integer(implied_port ? 1 : 0);
+    a_map["info_hash"] = bencode::string(info_hash_20);
+    a_map["port"] = bencode::integer(port);
+    a_map["token"] = bencode::string(token);
+    return bencode::dict({{"a", bencode::dict(a_map)},
+                          {"q", bencode::string("announce_peer")},
+                          {"t", bencode::string(txn)},
+                          {"y", bencode::string("q")}});
 }
 
 std::string make_response(const std::string& txn, const NodeId& self_id)
 {
-    std::string r = bencode::dict({
-        {"id", bencode::string(self_id.to_string())}
-    });
-    return bencode::dict({
-        {"r", r},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("r")}
-    });
+    std::string r =
+        bencode::dict({{"id", bencode::string(self_id.to_string())}});
+    return bencode::dict(
+        {{"r", r}, {"t", bencode::string(txn)}, {"y", bencode::string("r")}});
 }
 
 static std::string nodes_to_compact(const std::vector<Node>& nodes)
@@ -106,70 +92,53 @@ static std::string nodes_to_compact(const std::vector<Node>& nodes)
 }
 
 std::string make_nodes_response(const std::string& txn,
-                                 const NodeId& self_id,
-                                 const std::vector<Node>& nodes)
+                                const NodeId& self_id,
+                                const std::vector<Node>& nodes)
 {
-    std::string r = bencode::dict({
-        {"id",    bencode::string(self_id.to_string())},
-        {"nodes", bencode::string(nodes_to_compact(nodes))}
-    });
-    return bencode::dict({
-        {"r", r},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("r")}
-    });
+    std::string r =
+        bencode::dict({{"id", bencode::string(self_id.to_string())},
+                       {"nodes", bencode::string(nodes_to_compact(nodes))}});
+    return bencode::dict(
+        {{"r", r}, {"t", bencode::string(txn)}, {"y", bencode::string("r")}});
 }
 
 std::string make_peers_response(const std::string& txn,
-                                 const NodeId& self_id,
-                                 const std::string& token,
-                                 const std::vector<std::string>& compact_peers)
+                                const NodeId& self_id,
+                                const std::string& token,
+                                const std::vector<std::string>& compact_peers)
 {
     std::vector<std::string> encoded;
     encoded.reserve(compact_peers.size());
     for (const auto& p : compact_peers)
         encoded.push_back(bencode::string(p));
 
-    std::string r = bencode::dict({
-        {"id",     bencode::string(self_id.to_string())},
-        {"token",  bencode::string(token)},
-        {"values", bencode::list(encoded)}
-    });
-    return bencode::dict({
-        {"r", r},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("r")}
-    });
+    std::string r = bencode::dict({{"id", bencode::string(self_id.to_string())},
+                                   {"token", bencode::string(token)},
+                                   {"values", bencode::list(encoded)}});
+    return bencode::dict(
+        {{"r", r}, {"t", bencode::string(txn)}, {"y", bencode::string("r")}});
 }
 
 std::string make_nodes_response_gp(const std::string& txn,
-                                    const NodeId& self_id,
-                                    const std::string& token,
-                                    const std::vector<Node>& nodes)
+                                   const NodeId& self_id,
+                                   const std::string& token,
+                                   const std::vector<Node>& nodes)
 {
-    std::string r = bencode::dict({
-        {"id",    bencode::string(self_id.to_string())},
-        {"nodes", bencode::string(nodes_to_compact(nodes))},
-        {"token", bencode::string(token)}
-    });
-    return bencode::dict({
-        {"r", r},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("r")}
-    });
+    std::string r =
+        bencode::dict({{"id", bencode::string(self_id.to_string())},
+                       {"nodes", bencode::string(nodes_to_compact(nodes))},
+                       {"token", bencode::string(token)}});
+    return bencode::dict(
+        {{"r", r}, {"t", bencode::string(txn)}, {"y", bencode::string("r")}});
 }
 
 std::string make_error(const std::string& txn, int code, const std::string& msg)
 {
-    std::vector<std::string> err_list = {
-        bencode::integer(code),
-        bencode::string(msg)
-    };
-    return bencode::dict({
-        {"e", bencode::list(err_list)},
-        {"t", bencode::string(txn)},
-        {"y", bencode::string("e")}
-    });
+    std::vector<std::string> err_list = {bencode::integer(code),
+                                         bencode::string(msg)};
+    return bencode::dict({{"e", bencode::list(err_list)},
+                          {"t", bencode::string(txn)},
+                          {"y", bencode::string("e")}});
 }
 
 // ---------------------------------------------------------------------------
@@ -290,14 +259,14 @@ std::optional<KrpcMessage> parse_krpc(const std::string& data)
             else if (q == "get_peers")
             {
                 msg.query_type = KrpcQuery::GetPeers;
-                msg.info_hash  = bstring(a, "info_hash");
+                msg.info_hash = bstring(a, "info_hash");
             }
             else if (q == "announce_peer")
             {
-                msg.query_type   = KrpcQuery::AnnouncePeer;
-                msg.info_hash    = bstring(a, "info_hash");
-                msg.token        = bstring(a, "token");
-                msg.peer_port    = static_cast<uint16_t>(binteger(a, "port"));
+                msg.query_type = KrpcQuery::AnnouncePeer;
+                msg.info_hash = bstring(a, "info_hash");
+                msg.token = bstring(a, "token");
+                msg.peer_port = static_cast<uint16_t>(binteger(a, "port"));
                 msg.implied_port = (binteger(a, "implied_port") != 0);
             }
             else
@@ -328,9 +297,11 @@ std::optional<KrpcMessage> parse_krpc(const std::string& data)
             if (e && e->content.size() >= 2)
             {
                 auto* code_node = dynamic_cast<BInteger*>(e->content[0].get());
-                auto* msg_node  = dynamic_cast<BString*>(e->content[1].get());
-                if (code_node) msg.error_code = static_cast<int>(code_node->value);
-                if (msg_node)  msg.error_msg  = msg_node->content;
+                auto* msg_node = dynamic_cast<BString*>(e->content[1].get());
+                if (code_node)
+                    msg.error_code = static_cast<int>(code_node->value);
+                if (msg_node)
+                    msg.error_msg = msg_node->content;
             }
         }
         else
@@ -371,17 +342,63 @@ std::string bytes_hex_prefix(const std::string& bytes, size_t n = 8)
     return oss.str();
 }
 
+std::string bytes_hex(const std::string& bytes)
+{
+    if (bytes.empty())
+        return "";
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (unsigned char byte : bytes)
+        oss << std::setw(2) << static_cast<unsigned>(byte);
+    return oss.str();
+}
+
+std::string format_nodes(const std::vector<Node>& nodes)
+{
+    std::ostringstream oss;
+    oss << '[';
+    for (size_t i = 0; i < nodes.size(); ++i)
+    {
+        if (i > 0)
+            oss << ", ";
+        oss << nodes[i].ip << ':' << nodes[i].port;
+    }
+    oss << ']';
+    return oss.str();
+}
+
+std::pair<size_t, std::string> format_peers(
+    const std::vector<std::string>& compact_peers)
+{
+    std::ostringstream oss;
+    oss << '[';
+    size_t count = 0;
+    for (size_t i = 0; i < compact_peers.size(); ++i)
+    {
+        std::string ip;
+        uint16_t port = 0;
+        if (!compact_to_peer(compact_peers[i], 0, ip, port))
+            continue;
+        if (count > 0)
+            oss << ", ";
+        ++count;
+        oss << ip << ':' << port;
+    }
+    oss << ']';
+    return {count, oss.str()};
+}
+
 }  // namespace
 
 std::string format_krpc_summary(const KrpcMessage& msg)
 {
     std::ostringstream oss;
-    oss << "t=" << txn_hex(msg.txn);
+    oss << "transaction_id=" << txn_hex(msg.txn);
 
     switch (msg.type)
     {
         case KrpcType::Query:
-            oss << " y=q";
+            oss << " QUERY";
             if (!msg.query_type)
             {
                 oss << " q=?";
@@ -390,40 +407,49 @@ std::string format_krpc_summary(const KrpcMessage& msg)
             switch (*msg.query_type)
             {
                 case KrpcQuery::Ping:
-                    oss << " q=ping";
+                    oss << " PING";
                     break;
                 case KrpcQuery::FindNode:
-                    oss << " q=find_node target=" << msg.target.hex();
+                    oss << " FIND_NODE target=" << msg.target.hex();
                     break;
                 case KrpcQuery::GetPeers:
-                    oss << " q=get_peers info_hash=" << bytes_hex_prefix(msg.info_hash);
+                    oss << " GET_PEERS info_hash="
+                        << bytes_hex_prefix(msg.info_hash);
                     break;
                 case KrpcQuery::AnnouncePeer:
-                    oss << " q=announce_peer info_hash="
-                        << bytes_hex_prefix(msg.info_hash) << " port="
-                        << msg.peer_port
+                    oss << " ANNOUNCE_PEERS info_hash="
+                        << bytes_hex_prefix(msg.info_hash)
+                        << " port=" << msg.peer_port
                         << (msg.implied_port ? " implied_port=1" : "");
                     break;
             }
             break;
 
         case KrpcType::Response:
-            oss << " y=r";
+            oss << " RESPONSE";
             if (!msg.nodes.empty())
-                oss << " nodes=" << msg.nodes.size();
+            {
+                oss << "\n    nodes(" << msg.nodes.size()
+                    << ")=" << format_nodes(msg.nodes);
+            }
             if (!msg.peers.empty())
-                oss << " peers=" << msg.peers.size();
+            {
+                const auto [peer_count, peer_list] = format_peers(msg.peers);
+                oss << "\n    peers(" << peer_count << ")=" << peer_list;
+            }
             if (!msg.token.empty())
-                oss << " token=" << msg.token.size() << "b";
+                oss << "\n    token=" << bytes_hex(msg.token);
+            if (!msg.sender_id.is_zero())
+                oss << "\n    id=" << msg.sender_id.hex().substr(0, 8) << "...";
             break;
 
         case KrpcType::Error:
-            oss << " y=e code=" << msg.error_code << " msg=\"" << msg.error_msg
-                << '"';
+            oss << " ERROR code=" << msg.error_code << " msg=\""
+                << msg.error_msg << '"';
             break;
     }
 
-    if (!msg.sender_id.is_zero())
+    if (!msg.sender_id.is_zero() && msg.type != KrpcType::Response)
         oss << " id=" << msg.sender_id.hex().substr(0, 8) << "...";
 
     return oss.str();
