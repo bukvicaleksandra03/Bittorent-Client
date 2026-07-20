@@ -82,7 +82,7 @@ std::string make_response(const std::string& txn, const NodeId& self_id)
         {{"r", r}, {"t", bencode::string(txn)}, {"y", bencode::string("r")}});
 }
 
-static std::string nodes_to_compact(const std::vector<Node>& nodes)
+static std::string nodes_to_compact(const std::vector<RoutingEntry>& nodes)
 {
     std::string out;
     out.reserve(nodes.size() * 26);
@@ -93,7 +93,7 @@ static std::string nodes_to_compact(const std::vector<Node>& nodes)
 
 std::string make_nodes_response(const std::string& txn,
                                 const NodeId& self_id,
-                                const std::vector<Node>& nodes)
+                                const std::vector<RoutingEntry>& nodes)
 {
     std::string r =
         bencode::dict({{"id", bencode::string(self_id.to_string())},
@@ -122,7 +122,7 @@ std::string make_peers_response(const std::string& txn,
 std::string make_nodes_response_gp(const std::string& txn,
                                    const NodeId& self_id,
                                    const std::string& token,
-                                   const std::vector<Node>& nodes)
+                                   const std::vector<RoutingEntry>& nodes)
 {
     std::string r =
         bencode::dict({{"id", bencode::string(self_id.to_string())},
@@ -198,11 +198,11 @@ static BList* blist(BDict* d, const std::string& key)
     return dynamic_cast<BList*>(it->second.get());
 }
 
-static std::vector<Node> parse_nodes(const std::string& compact)
+static std::vector<RoutingEntry> parse_nodes(const std::string& compact)
 {
-    std::vector<Node> out;
+    std::vector<RoutingEntry> out;
     for (size_t i = 0; i + 26 <= compact.size(); i += 26)
-        out.push_back(Node::from_compact(compact, i));
+        out.push_back(RoutingEntry::from_compact(compact, i));
     return out;
 }
 
@@ -353,7 +353,7 @@ std::string bytes_hex(const std::string& bytes)
     return oss.str();
 }
 
-std::string format_nodes(const std::vector<Node>& nodes)
+std::string format_nodes(const std::vector<RoutingEntry>& nodes)
 {
     std::ostringstream oss;
     oss << '[';

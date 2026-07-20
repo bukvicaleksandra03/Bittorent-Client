@@ -1,5 +1,5 @@
 // tests/dht/test_routing_table.cpp
-// Unit tests for dht::RoutingTable and dht::Node
+// Unit tests for dht::RoutingTable and dht::RoutingEntry
 
 #include <gtest/gtest.h>
 
@@ -18,9 +18,9 @@ TEST(RoutingTable, InsertAndFind)
     dht::RoutingTable rt(self);
 
     dht::NodeId nid = dht::NodeId::random();
-    dht::Node node{nid, "127.0.0.1", 6881};
+    dht::RoutingEntry entry{nid, "127.0.0.1", 6881};
 
-    rt.add(node);
+    rt.add(entry);
     EXPECT_GE(rt.size(), 1u);
 
     auto closest = rt.closest(nid, 8);

@@ -28,26 +28,26 @@ using PeerCallback = std::function<void(
     const std::string& info_hash_hex, const std::string& ip, uint16_t port)>;
 
 // ---------------------------------------------------------------------------
-// DhtNode – the public interface to the DHT subsystem.
+// DhtClient – the public interface to the DHT subsystem.
 //
 // Usage:
-//   DhtNode node(6881);
+//   DhtClient node(6881);
 //   node.set_peer_callback(cb);
 //   node.start();
 //   node.announce("info_hash_20_bytes", 6881);  // after connect
 //   ...
 //   node.stop();
 // ---------------------------------------------------------------------------
-class DhtNode
+class DhtClient
 {
    public:
     // port: UDP port to listen on (0 = OS-assigned).
-    explicit DhtNode(uint16_t port = 6881);
-    ~DhtNode();
+    explicit DhtClient(uint16_t port = 6881);
+    ~DhtClient();
 
     // Non-copyable, non-movable (owns a thread and a socket fd).
-    DhtNode(const DhtNode&) = delete;
-    DhtNode& operator=(const DhtNode&) = delete;
+    DhtClient(const DhtClient&) = delete;
+    DhtClient& operator=(const DhtClient&) = delete;
 
     // Start the DHT node.  Binds the UDP socket, bootstraps from known nodes,
     // and launches the background I/O and maintenance threads.

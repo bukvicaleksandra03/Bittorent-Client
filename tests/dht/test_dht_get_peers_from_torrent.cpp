@@ -42,7 +42,7 @@
 #include <thread>
 
 #include "bencode/bencode_parser.h"
-#include "dht/dht_node.h"
+#include "dht/dht_client.h"
 #include "logger.h"
 
 namespace fs = std::filesystem;
@@ -86,18 +86,18 @@ std::string sanitize_filename(const std::string& name)
     return out;
 }
 
-bool wait_for_routing_table(dht::DhtNode& node,
+bool wait_for_routing_table(dht::DhtClient& client,
                             size_t min_size,
                             std::chrono::milliseconds timeout)
 {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline)
     {
-        if (node.routing_table_size() >= min_size)
+        if (client.routing_table_size() >= min_size)
             return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    return node.routing_table_size() >= min_size;
+    return client.routing_table_size() >= min_size;
 }
 
 struct PeerEndpoint
@@ -137,7 +137,7 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
     std::mutex peers_mutex;
     std::set<PeerEndpoint> peers;
 
-    dht::DhtNode node(0);
+    dht::DhtClient client(0);
     {
         auto krpc_logger = std::make_shared<logger::Logger>();
         krpc_logger->set_level(logger::Level::INFO);
@@ -150,10 +150,10 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
             fs::remove(log_dir / "dht.log");
         }
         krpc_logger->set_file((log_dir / "dht.log").string());
-        node.add_krpc_logger(krpc_logger);
+        client.add_krpc_logger(krpc_logger);
     }
 
-    node.set_peer_callback(
+    client.set_peer_callback(
         [&](const std::string& /*info_hash_hex*/,
             const std::string& ip,
             uint16_t port)
@@ -162,13 +162,13 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
             peers.insert(PeerEndpoint{ip, port});
         });
 
-    node.start();
-    if (!node.is_running())
+    client.start();
+    if (!client.is_running())
         return {};
 
-    if (!wait_for_routing_table(node, 1, std::chrono::seconds(15)))
+    if (!wait_for_routing_table(client, 1, std::chrono::seconds(15)))
     {
-        node.stop();
+        client.stop();
         return {};
     }
 
@@ -178,7 +178,7 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
 
     while (std::chrono::steady_clock::now() < deadline)
     {
-        node.get_peers(info_hash);
+        client.get_peers(info_hash);
 
         if (stop_on_first_peer)
         {
@@ -203,7 +203,7 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
 
-    node.stop();
+    client.stop();
 
     std::lock_guard<std::mutex> lock(peers_mutex);
     return peers;

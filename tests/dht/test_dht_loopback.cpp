@@ -10,7 +10,7 @@
 #include <chrono>
 #include <thread>
 
-#include "dht/dht_node.h"
+#include "dht/dht_client.h"
 #include "dht/krpc.h"
 #include "dht/node_id.h"
 #include "net/socket.h"
@@ -25,27 +25,27 @@ int next_loopback_port()
     return ++port_counter;
 }
 
-bool wait_for_routing_table(dht::DhtNode& node,
+bool wait_for_routing_table(dht::DhtClient& client,
                             size_t min_size,
                             std::chrono::milliseconds timeout)
 {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline)
     {
-        if (node.routing_table_size() >= min_size)
+        if (client.routing_table_size() >= min_size)
             return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    return node.routing_table_size() >= min_size;
+    return client.routing_table_size() >= min_size;
 }
 
 }  // namespace
 
-TEST(DhtNode, LocalPingPopulatesRoutingTable)
+TEST(DhtClient, LocalPingPopulatesRoutingTable)
 {
     const uint16_t port = static_cast<uint16_t>(next_loopback_port());
 
-    dht::DhtNode server(port);
+    dht::DhtClient server(port);
     server.start();
     ASSERT_TRUE(server.is_running());
 
@@ -60,11 +60,11 @@ TEST(DhtNode, LocalPingPopulatesRoutingTable)
     server.stop();
 }
 
-TEST(DhtNode, BootstrapPopulatesTable)
+TEST(DhtClient, BootstrapPopulatesTable)
 {
-    dht::DhtNode node(0);
-    node.start();
+    dht::DhtClient client(0);
+    client.start();
     std::this_thread::sleep_for(std::chrono::seconds(5));
-    EXPECT_GT(node.routing_table_size(), 0u);
-    node.stop();
+    EXPECT_GT(client.routing_table_size(), 0u);
+    client.stop();
 }

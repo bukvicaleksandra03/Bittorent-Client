@@ -5,7 +5,7 @@
 #include <iostream>
 #include <thread>
 
-#include "dht/dht_node.h"
+#include "dht/dht_client.h"
 #include "peer_address.h"
 #include "peer_wire/torrent_manager.h"
 #include "utils.h"
@@ -35,9 +35,9 @@ void SessionManager::add(std::unique_ptr<TorrentManager> manager)
         return;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_dht_node && m_dht_node->is_running())
+    if (m_dht_client && m_dht_client->is_running())
     {
-        m_dht_node->add_krpc_logger(manager->krpc_logger());
+        m_dht_client->add_krpc_logger(manager->krpc_logger());
     }
     m_sessions.push_back(std::move(manager));
 }
@@ -54,8 +54,9 @@ void SessionManager::start_all()
         {
             std::cout << "[SessionManager] UPnP: mapped port "
                       << m_upnp_mapping->external_port() << " -> "
-                      << m_listen_port << " (external IP: "
-                      << m_upnp_mapping->external_ip() << ")\n";
+                      << m_listen_port
+                      << " (external IP: " << m_upnp_mapping->external_ip()
+                      << ")\n";
         }
         else
         {
@@ -66,13 +67,13 @@ void SessionManager::start_all()
 
     // Start DHT node.  Use the same port as the BitTorrent listen port so the
     // UPnP mapping (if any) also covers DHT traffic.
-    if (!m_dht_node)
+    if (!m_dht_client)
     {
-        m_dht_node = std::make_unique<dht::DhtNode>(m_listen_port);
+        m_dht_client = std::make_unique<dht::DhtClient>(m_listen_port);
 
         // When the DHT finds peers for an info hash, inject them into the
         // matching TorrentManager (if we have one).
-        m_dht_node->set_peer_callback(
+        m_dht_client->set_peer_callback(
             [this](const std::string& info_hash_hex,
                    const std::string& ip,
                    uint16_t port)
@@ -83,16 +84,16 @@ void SessionManager::start_all()
                     if (s && s->info_hash_hex() == info_hash_hex)
                     {
                         PeerAddress p;
-                        p.ip   = ip;
+                        p.ip = ip;
                         p.port = port;
                         s->add_dht_peer(p);
                     }
                 }
             });
 
-        m_dht_node->start();
+        m_dht_client->start();
         std::cout << "[SessionManager] DHT: started on port " << m_listen_port
-                  << " (node id: " << m_dht_node->self_id().hex() << ")\n";
+                  << " (node id: " << m_dht_client->self_id().hex() << ")\n";
     }
 
     // Kick off get_peers lookups for every torrent we already know about.
@@ -102,8 +103,8 @@ void SessionManager::start_all()
         {
             if (s)
             {
-                m_dht_node->add_krpc_logger(s->krpc_logger());
-                m_dht_node->get_peers(s->info_hash_str());
+                m_dht_client->add_krpc_logger(s->krpc_logger());
+                m_dht_client->get_peers(s->info_hash_str());
                 s->start();
             }
         }
@@ -116,10 +117,10 @@ void SessionManager::stop_all()
 
     // Stop DHT before the torrent sessions so the callback cannot fire into
     // a half-destroyed TorrentManager.
-    if (m_dht_node)
+    if (m_dht_client)
     {
-        m_dht_node->stop();
-        m_dht_node.reset();
+        m_dht_client->stop();
+        m_dht_client.reset();
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -154,7 +155,8 @@ bool SessionManager::all_complete() const
 // Prints one block per session, for example:
 //
 //   ---- sessions (1) ----
-//     ubuntu-22.04-desktop-amd64.iso           0.25%  (13.00 MiB / 5.20 GiB)  5.20 MiB/s  active
+//     ubuntu-22.04-desktop-amd64.iso           0.25%  (13.00 MiB / 5.20
+//     GiB)  5.20 MiB/s  active
 //     ---- top peers ----
 //       192.168.1.1:6881              45.20 MiB
 //       10.0.0.1:51413               32.10 MiB
@@ -202,9 +204,9 @@ void SessionManager::print_status_locked(std::ostream& os) const
                 m_prev_bytes[i] = curr;
 
                 const uint64_t up_curr = m_sessions[i]->uploaded_bytes();
-                const uint64_t up_delta =
-                    (up_curr >= m_prev_up_bytes[i]) ? (up_curr - m_prev_up_bytes[i])
-                                                    : 0;
+                const uint64_t up_delta = (up_curr >= m_prev_up_bytes[i])
+                                              ? (up_curr - m_prev_up_bytes[i])
+                                              : 0;
                 m_up_speeds_bps[i] = static_cast<double>(up_delta) / elapsed;
                 m_prev_up_bytes[i] = up_curr;
             }
@@ -232,11 +234,11 @@ void SessionManager::print_status_locked(std::ostream& os) const
         const char* state_str = seeding ? "seeding" : "active";
 
         os << "  " << std::setw(48) << std::left
-           << s->torrent_name().substr(0, 48) << std::fixed << std::setprecision(2)
-           << std::setw(7) << std::right << s->progress() << "%  "
-           << std::setw(24) << std::left << size_info
-           << "  " << std::setw(14) << std::left << speed_str
-           << "  " << state_str << "\n";
+           << s->torrent_name().substr(0, 48) << std::fixed
+           << std::setprecision(2) << std::setw(7) << std::right
+           << s->progress() << "%  " << std::setw(24) << std::left << size_info
+           << "  " << std::setw(14) << std::left << speed_str << "  "
+           << state_str << "\n";
 
         // While seeding, show what we have served: total uploaded, the number
         // of blocks/pieces served, and the current upload rate.

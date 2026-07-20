@@ -1,4 +1,4 @@
-#include "dht/dht_node.h"
+#include "dht/dht_client.h"
 
 #include <chrono>
 #include <iomanip>
@@ -7,9 +7,9 @@
 #include <stdexcept>
 
 #include "dht/krpc.h"
-#include "peer_address.h"
 #include "net/socket.h"
 #include "net/socket_addresses.h"
+#include "peer_address.h"
 
 namespace dht
 {
@@ -49,7 +49,7 @@ static std::string make_token_secret()
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-DhtNode::DhtNode(uint16_t port)
+DhtClient::DhtClient(uint16_t port)
     : self_id_(NodeId::random()),
       requested_port_(port),
       port_(port),
@@ -60,7 +60,7 @@ DhtNode::DhtNode(uint16_t port)
 {
 }
 
-DhtNode::~DhtNode()
+DhtClient::~DhtClient()
 {
     stop();
 }
@@ -69,7 +69,7 @@ DhtNode::~DhtNode()
 // start / stop
 // ---------------------------------------------------------------------------
 
-void DhtNode::start()
+void DhtClient::start()
 {
     if (running_.load())
         return;
@@ -91,7 +91,7 @@ void DhtNode::start()
     bootstrap();
 }
 
-void DhtNode::stop()
+void DhtClient::stop()
 {
     if (!running_.exchange(false))
         return;
@@ -118,13 +118,13 @@ void DhtNode::stop()
 // Public API
 // ---------------------------------------------------------------------------
 
-size_t DhtNode::routing_table_size() const
+size_t DhtClient::routing_table_size() const
 {
     std::lock_guard<std::mutex> lk(table_mutex_);
     return routing_table_.size();
 }
 
-void DhtNode::add_krpc_logger(std::shared_ptr<logger::Logger> logger)
+void DhtClient::add_krpc_logger(std::shared_ptr<logger::Logger> logger)
 {
     if (!logger)
         return;
@@ -138,7 +138,7 @@ void DhtNode::add_krpc_logger(std::shared_ptr<logger::Logger> logger)
     krpc_loggers_.push_back(std::move(logger));
 }
 
-void DhtNode::log_krpc(const char* direction,
+void DhtClient::log_krpc(const char* direction,
                        const std::string& msg,
                        const std::string& ip,
                        uint16_t port) const
@@ -161,7 +161,7 @@ void DhtNode::log_krpc(const char* direction,
     }
 }
 
-void DhtNode::log_krpc(const char* direction,
+void DhtClient::log_krpc(const char* direction,
                        const KrpcMessage& msg,
                        const std::string& ip,
                        uint16_t port) const
@@ -178,9 +178,9 @@ void DhtNode::log_krpc(const char* direction,
     }
 }
 
-void DhtNode::get_peers(const std::string& info_hash_20)
+void DhtClient::get_peers(const std::string& info_hash_20)
 {
-    std::vector<Node> closest;
+    std::vector<RoutingEntry> closest;
     {
         std::lock_guard<std::mutex> lk(table_mutex_);
         closest = routing_table_.closest(NodeId::from_string(info_hash_20), 8);
@@ -193,7 +193,7 @@ void DhtNode::get_peers(const std::string& info_hash_20)
         send_krpc(msg, node.ip, node.port);
 }
 
-void DhtNode::announce(const std::string& info_hash_20, uint16_t port)
+void DhtClient::announce(const std::string& info_hash_20, uint16_t port)
 {
     std::vector<std::pair<std::string, std::string>> tokens_to_announce;
     {
@@ -223,7 +223,7 @@ void DhtNode::announce(const std::string& info_hash_20, uint16_t port)
 // Network I/O
 // ---------------------------------------------------------------------------
 
-void DhtNode::send_krpc(const std::string& msg,
+void DhtClient::send_krpc(const std::string& msg,
                         const std::string& ip,
                         uint16_t port)
 {
@@ -242,7 +242,7 @@ void DhtNode::send_krpc(const std::string& msg,
     }
 }
 
-void DhtNode::recv_loop()
+void DhtClient::recv_loop()
 {
     while (running_.load())
     {
@@ -275,7 +275,7 @@ void DhtNode::recv_loop()
     }
 }
 
-void DhtNode::handle_message(const KrpcMessage& msg,
+void DhtClient::handle_message(const KrpcMessage& msg,
                              const std::string& src_ip,
                              uint16_t src_port)
 {
@@ -284,7 +284,7 @@ void DhtNode::handle_message(const KrpcMessage& msg,
     // Update the routing table with any node we hear from.
     if (!msg.sender_id.is_zero())
     {
-        Node n;
+        RoutingEntry n;
         n.id = msg.sender_id;
         n.ip = src_ip;
         n.port = src_port;
@@ -331,18 +331,18 @@ void DhtNode::handle_message(const KrpcMessage& msg,
 // Query handlers
 // ---------------------------------------------------------------------------
 
-void DhtNode::on_ping(const KrpcMessage& msg,
+void DhtClient::on_ping(const KrpcMessage& msg,
                       const std::string& src_ip,
                       uint16_t src_port)
 {
     send_krpc(make_response(msg.txn, self_id_), src_ip, src_port);
 }
 
-void DhtNode::on_find_node(const KrpcMessage& msg,
+void DhtClient::on_find_node(const KrpcMessage& msg,
                            const std::string& src_ip,
                            uint16_t src_port)
 {
-    std::vector<Node> closest;
+    std::vector<RoutingEntry> closest;
     {
         std::lock_guard<std::mutex> lk(table_mutex_);
         closest = routing_table_.closest(msg.target, 8);
@@ -351,7 +351,7 @@ void DhtNode::on_find_node(const KrpcMessage& msg,
         make_nodes_response(msg.txn, self_id_, closest), src_ip, src_port);
 }
 
-void DhtNode::on_get_peers(const KrpcMessage& msg,
+void DhtClient::on_get_peers(const KrpcMessage& msg,
                            const std::string& src_ip,
                            uint16_t src_port)
 {
@@ -375,7 +375,7 @@ void DhtNode::on_get_peers(const KrpcMessage& msg,
     }
     else
     {
-        std::vector<Node> closest;
+        std::vector<RoutingEntry> closest;
         {
             std::lock_guard<std::mutex> lk(table_mutex_);
             closest =
@@ -387,7 +387,7 @@ void DhtNode::on_get_peers(const KrpcMessage& msg,
     }
 }
 
-void DhtNode::on_announce_peer(const KrpcMessage& msg,
+void DhtClient::on_announce_peer(const KrpcMessage& msg,
                                const std::string& src_ip,
                                uint16_t src_port)
 {
@@ -424,7 +424,7 @@ void DhtNode::on_announce_peer(const KrpcMessage& msg,
 // Response handler
 // ---------------------------------------------------------------------------
 
-void DhtNode::on_response(const KrpcMessage& msg,
+void DhtClient::on_response(const KrpcMessage& msg,
                           const std::string& src_ip,
                           uint16_t src_port)
 {
@@ -474,13 +474,13 @@ void DhtNode::on_response(const KrpcMessage& msg,
 // Bootstrap / maintenance
 // ---------------------------------------------------------------------------
 
-void DhtNode::bootstrap()
+void DhtClient::bootstrap()
 {
     for (const auto& [host, port] : BOOTSTRAP_NODES)
         ping_bootstrap(host, port);
 }
 
-void DhtNode::ping_bootstrap(const std::string& host, uint16_t port)
+void DhtClient::ping_bootstrap(const std::string& host, uint16_t port)
 {
     std::string ip;
     try
@@ -511,7 +511,7 @@ void DhtNode::ping_bootstrap(const std::string& host, uint16_t port)
     send_krpc(make_find_node(txn, self_id_, self_id_), ip, port);
 }
 
-void DhtNode::maintenance_loop()
+void DhtClient::maintenance_loop()
 {
     std::unique_lock<std::mutex> lk(stop_mutex_);
     while (running_.load())
@@ -534,10 +534,10 @@ void DhtNode::maintenance_loop()
     }
 }
 
-void DhtNode::refresh_buckets()
+void DhtClient::refresh_buckets()
 {
     // Re-ping each node in the routing table to verify it's still alive.
-    std::vector<Node> nodes;
+    std::vector<RoutingEntry> nodes;
     {
         std::lock_guard<std::mutex> lk(table_mutex_);
         nodes = routing_table_.all();
@@ -559,19 +559,19 @@ void DhtNode::refresh_buckets()
 // Token management
 // ---------------------------------------------------------------------------
 
-std::string DhtNode::current_token() const
+std::string DhtClient::current_token() const
 {
     std::lock_guard<std::mutex> lk(token_mutex_);
     return current_token_;
 }
 
-bool DhtNode::verify_token(const std::string& token) const
+bool DhtClient::verify_token(const std::string& token) const
 {
     std::lock_guard<std::mutex> lk(token_mutex_);
     return (token == current_token_ || token == prev_token_);
 }
 
-void DhtNode::rotate_token_if_needed()
+void DhtClient::rotate_token_if_needed()
 {
     std::lock_guard<std::mutex> lk(token_mutex_);
     auto now = std::chrono::steady_clock::now();

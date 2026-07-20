@@ -14,7 +14,7 @@
 
 namespace dht
 {
-class DhtNode;
+class DhtClient;
 }
 
 class TorrentManager;
@@ -27,9 +27,10 @@ class TorrentManager;
 class SessionManager
 {
    public:
-    // listen_port is the single TCP port used by *all* torrents in this session.
-    // A single UPnP mapping is attempted at startup and kept alive for the whole
-    // session lifetime; released when the SessionManager is destroyed.
+    // listen_port is the single TCP port used by *all* torrents in this
+    // session. A single UPnP mapping is attempted at startup and kept alive for
+    // the whole session lifetime; released when the SessionManager is
+    // destroyed.
     explicit SessionManager(uint16_t listen_port = 6881);
 
     SessionManager(const SessionManager&) = delete;
@@ -69,7 +70,8 @@ class SessionManager
     std::thread m_status_thread;
     std::atomic<bool> m_status_stop{true};
     std::ostream* m_status_stream{nullptr};
-    std::chrono::milliseconds m_status_interval{std::chrono::milliseconds{1000}};
+    std::chrono::milliseconds m_status_interval{
+        std::chrono::milliseconds{1000}};
 
     // Speed tracking — all guarded by m_mutex (mutable so print_status_locked
     // can update them in a const context).
@@ -86,6 +88,6 @@ class SessionManager
     uint16_t m_listen_port{6881};
     std::optional<UPnPPortMapping> m_upnp_mapping;
 
-    // DHT node — one per session, shared across all torrents.
-    std::unique_ptr<dht::DhtNode> m_dht_node;
+    // DHT client — one per session, shared across all torrents.
+    std::unique_ptr<dht::DhtClient> m_dht_client;
 };

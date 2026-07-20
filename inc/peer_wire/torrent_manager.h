@@ -59,7 +59,8 @@ class TorrentManager
     // Inject a DHT-discovered peer directly into the peer pool.
     void add_dht_peer(const PeerAddress& peer);
 
-    // Raw 20-byte info hash as std::string (for DhtNode::get_peers / announce).
+    // Raw 20-byte info hash as std::string (for DhtClient::get_peers /
+    // announce).
     std::string info_hash_str() const;
 
     // Hex-encoded info hash (for matching DHT peer-callback info_hash_hex).
@@ -116,7 +117,7 @@ class TorrentManager
     // PeerConnection, so peer threads never share a log mutex.
     std::shared_ptr<logger::Logger> m_logger;
 
-    // KRPC-only logger registered with the shared DhtNode via SessionManager.
+    // KRPC-only logger registered with the shared DhtClient via SessionManager.
     std::shared_ptr<logger::Logger> m_krpc_logger;
 
     DiskWriter m_disk_writer;
