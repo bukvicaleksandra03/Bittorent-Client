@@ -6,6 +6,7 @@
 #include <random>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 #include "bencode/bencode_encoder.h"
 #include "bencode/bencode_parser.h"
@@ -198,12 +199,28 @@ static BList* blist(BDict* d, const std::string& key)
     return dynamic_cast<BList*>(it->second.get());
 }
 
-static std::vector<RoutingEntry> parse_nodes(const std::string& compact)
+static void parse_nodes(const std::string& compact,
+                        std::vector<RoutingEntry>& nodes,
+                        std::vector<size_t>& counts)
 {
-    std::vector<RoutingEntry> out;
+    nodes.clear();
+    counts.clear();
+    std::unordered_map<std::string, size_t> index;
+    index.reserve(compact.size() / 26);
+
     for (size_t i = 0; i + 26 <= compact.size(); i += 26)
-        out.push_back(RoutingEntry::from_compact(compact, i));
-    return out;
+    {
+        const std::string key = compact.substr(i, 26);
+        const auto it = index.find(key);
+        if (it != index.end())
+        {
+            counts[it->second]++;
+            continue;
+        }
+        index.emplace(key, nodes.size());
+        nodes.push_back(RoutingEntry::from_compact(compact, i));
+        counts.push_back(1);
+    }
 }
 
 static std::vector<std::string> parse_peers(BList* lst)
@@ -285,7 +302,7 @@ std::optional<KrpcMessage> parse_krpc(const std::string& data)
 
             std::string nodes_raw = bstring(r, "nodes");
             if (!nodes_raw.empty())
-                msg.nodes = parse_nodes(nodes_raw);
+                parse_nodes(nodes_raw, msg.nodes, msg.node_counts);
 
             msg.token = bstring(r, "token");
             msg.peers = parse_peers(blist(r, "values"));
@@ -336,7 +353,10 @@ std::string bytes_hex_prefix(const std::string& bytes, size_t n = 8)
     std::ostringstream oss;
     oss << std::hex << std::setfill('0');
     for (size_t i = 0; i < std::min(n, bytes.size()); ++i)
-        oss << std::setw(2) << static_cast<unsigned>(bytes[i]);
+    {
+        const unsigned char byte = static_cast<unsigned char>(bytes[i]);
+        oss << std::setw(2) << static_cast<unsigned>(byte);
+    }
     if (bytes.size() > n)
         oss << "...";
     return oss.str();
@@ -353,7 +373,16 @@ std::string bytes_hex(const std::string& bytes)
     return oss.str();
 }
 
-std::string format_nodes(const std::vector<RoutingEntry>& nodes)
+std::string format_node_id_prefix(const NodeId& id)
+{
+    const std::string hex = id.hex();
+    if (hex.size() <= 8)
+        return hex;
+    return hex.substr(0, 8) + "...";
+}
+
+std::string format_nodes(const std::vector<RoutingEntry>& nodes,
+                         const std::vector<size_t>& counts)
 {
     std::ostringstream oss;
     oss << '[';
@@ -361,7 +390,12 @@ std::string format_nodes(const std::vector<RoutingEntry>& nodes)
     {
         if (i > 0)
             oss << ", ";
-        oss << nodes[i].ip << ':' << nodes[i].port;
+        oss << "id=" << format_node_id_prefix(nodes[i].id) << " @ "
+            << nodes[i].ip << ':' << nodes[i].port;
+        const size_t repeat =
+            (i < counts.size()) ? counts[i] : 1;
+        if (repeat > 1)
+            oss << " x" << repeat;
     }
     oss << ']';
     return oss.str();
@@ -410,7 +444,8 @@ std::string format_krpc_summary(const KrpcMessage& msg)
                     oss << " PING";
                     break;
                 case KrpcQuery::FindNode:
-                    oss << " FIND_NODE target=" << msg.target.hex();
+                    oss << " FIND_NODE target=" << msg.target.hex().substr(0, 8)
+                        << "...";
                     break;
                 case KrpcQuery::GetPeers:
                     oss << " GET_PEERS info_hash="
@@ -429,8 +464,18 @@ std::string format_krpc_summary(const KrpcMessage& msg)
             oss << " RESPONSE";
             if (!msg.nodes.empty())
             {
-                oss << "\n    nodes(" << msg.nodes.size()
-                    << ")=" << format_nodes(msg.nodes);
+                size_t wire_count = 0;
+                if (!msg.node_counts.empty())
+                {
+                    for (size_t c : msg.node_counts)
+                        wire_count += c;
+                }
+                else
+                {
+                    wire_count = msg.nodes.size();
+                }
+                oss << "\n    nodes(" << wire_count << ")="
+                    << format_nodes(msg.nodes, msg.node_counts);
             }
             if (!msg.peers.empty())
             {

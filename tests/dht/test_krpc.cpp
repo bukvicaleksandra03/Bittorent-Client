@@ -8,6 +8,7 @@
 #include "bencode/bencode_types.h"
 #include "dht/krpc.h"
 #include "dht/node_id.h"
+#include "dht/routing_table.h"
 
 // ===========================================================================
 // KRPC message builders + parser
@@ -143,4 +144,54 @@ TEST(Krpc, ParseInvalid)
     EXPECT_FALSE(dht::parse_krpc("not bencoded").has_value());
     EXPECT_FALSE(dht::parse_krpc("i42e").has_value());  // integer, not dict
     EXPECT_FALSE(dht::parse_krpc("").has_value());
+}
+
+TEST(Krpc, ParseNodesSkipsIdenticalCompacts)
+{
+    dht::RoutingEntry n;
+    n.id   = make_id(std::string(20, '\x38'));
+    n.ip   = "153.117.29.136";
+    n.port = 36474;
+
+    const std::vector<dht::RoutingEntry> repeated(8, n);
+    const dht::NodeId self = make_id("abcdefghij0123456789");
+    const std::string msg  = dht::make_nodes_response("ff", self, repeated);
+
+    const auto opt = dht::parse_krpc(msg);
+    ASSERT_TRUE(opt.has_value());
+    EXPECT_EQ(opt->nodes.size(), 1u);
+    ASSERT_EQ(opt->node_counts.size(), 1u);
+    EXPECT_EQ(opt->node_counts[0], 8u);
+    EXPECT_EQ(opt->nodes[0].ip, "153.117.29.136");
+    EXPECT_EQ(opt->nodes[0].port, 36474u);
+
+    const std::string summary = dht::format_krpc_summary(*opt);
+    EXPECT_NE(summary.find("nodes(8)"), std::string::npos);
+    EXPECT_NE(summary.find("x8"), std::string::npos);
+}
+
+TEST(Krpc, ResponseNodesSummaryIncludesNodeId)
+{
+    dht::RoutingEntry n1;
+    n1.id   = make_id(std::string(20, '\x01'));
+    n1.ip   = "221.148.137.123";
+    n1.port = 6881;
+
+    dht::RoutingEntry n2;
+    n2.id   = make_id(std::string(20, '\x02'));
+    n2.ip   = "221.148.137.123";
+    n2.port = 6881;
+
+    const dht::NodeId self = make_id("abcdefghij0123456789");
+    const std::string msg =
+        dht::make_nodes_response("aa", self, {n1, n2});
+
+    const auto opt = dht::parse_krpc(msg);
+    ASSERT_TRUE(opt.has_value());
+    ASSERT_EQ(opt->nodes.size(), 2u);
+
+    const std::string summary = dht::format_krpc_summary(*opt);
+    EXPECT_NE(summary.find("id=01010101..."), std::string::npos);
+    EXPECT_NE(summary.find("id=02020202..."), std::string::npos);
+    EXPECT_NE(summary.find("221.148.137.123:6881"), std::string::npos);
 }

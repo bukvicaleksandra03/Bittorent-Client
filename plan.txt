@@ -7,3 +7,4 @@
 
 - Add seeding capability. + Print who we are seeding to and how many bytes per second.
 
+- mem usage

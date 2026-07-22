@@ -72,17 +72,17 @@ TorrentManager::TorrentManager(std::unique_ptr<TorrentFile> torrent,
         (log_dir / (sanitize_filename(m_torrent->get_name()) + ".log"))
             .string());
 
-    m_krpc_logger = std::make_shared<logger::Logger>();
-    m_krpc_logger->set_level(log_level);
-    m_krpc_logger->set_prefix("KRPC ");
-    m_krpc_logger->set_file((log_dir / "dht.log").string());
-
     m_piece_manager.set_logger(m_logger);
 }
 
-std::shared_ptr<logger::Logger> TorrentManager::krpc_logger() const
+const std::string& TorrentManager::log_output_dir() const
 {
-    return m_krpc_logger;
+    return m_log_output_dir;
+}
+
+logger::Level TorrentManager::log_level() const
+{
+    return m_logger->get_level();
 }
 
 void TorrentManager::start()

@@ -88,8 +88,8 @@ class TorrentManager
     // top `n` entries.  Thread-safe.
     std::vector<PeerStat> top_upload_peers(size_t n) const;
 
-    // KRPC traffic logger: <log_output_dir>/<torrent_name>/dht.log
-    std::shared_ptr<logger::Logger> krpc_logger() const;
+    const std::string& log_output_dir() const;
+    logger::Level log_level() const;
 
    private:
     enum class TrackerEvent : uint32_t
@@ -116,9 +116,6 @@ class TorrentManager
     // Per-peer loggers are created in run_peer_worker and passed to each
     // PeerConnection, so peer threads never share a log mutex.
     std::shared_ptr<logger::Logger> m_logger;
-
-    // KRPC-only logger registered with the shared DhtClient via SessionManager.
-    std::shared_ptr<logger::Logger> m_krpc_logger;
 
     DiskWriter m_disk_writer;
     PieceManager m_piece_manager;

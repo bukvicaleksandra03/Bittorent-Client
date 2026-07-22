@@ -1,5 +1,6 @@
 #include "dht/dht_client.h"
 
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <random>
@@ -17,10 +18,14 @@ namespace dht
 // ---------------------------------------------------------------------------
 // Bootstrap nodes (well-known public DHT nodes from BEP 5)
 // ---------------------------------------------------------------------------
+// libtorrent's public router is the most reliable bootstrap in 2024+.
+// Legacy BitTorrent/uTorrent routers often stop responding on UDP/6881.
 static const std::vector<std::pair<std::string, uint16_t>> BOOTSTRAP_NODES = {
+    {"dht.libtorrent.org", 25401},
+    {"dht.libtorrent.org", 6881},
+    {"dht.transmissionbt.com", 6881},
     {"router.bittorrent.com", 6881},
     {"router.utorrent.com", 6881},
-    {"dht.transmissionbt.com", 6881},
 };
 
 // How often to rotate the token secret (5 minutes).
@@ -29,9 +34,21 @@ static constexpr auto TOKEN_ROTATE_INTERVAL = std::chrono::minutes(5);
 // How often to run the maintenance loop.
 static constexpr auto MAINT_INTERVAL = std::chrono::seconds(60);
 
+// How long a get_peers transaction id stays bound to an info hash.
+static constexpr auto PENDING_LOOKUP_TTL = std::chrono::minutes(2);
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+static std::string info_hash_bytes_to_hex(const std::string& info_hash_20)
+{
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (unsigned char c : info_hash_20)
+        oss << std::setw(2) << static_cast<unsigned>(c);
+    return oss.str();
+}
 
 // Generate a random token secret (8 bytes, hex-encoded).
 static std::string make_token_secret()
@@ -88,7 +105,28 @@ void DhtClient::start()
     recv_thread_ = std::thread([this] { recv_loop(); });
     maint_thread_ = std::thread([this] { maintenance_loop(); });
 
+    log_dht_info("listening on 0.0.0.0:" + std::to_string(port_) +
+                 " node_id=" + self_id_.hex().substr(0, 8) + "...");
     bootstrap();
+}
+
+void DhtClient::set_peer_callback(PeerCallback cb)
+{
+    std::lock_guard<std::mutex> lk(callback_mutex_);
+    peer_cb_ = std::move(cb);
+}
+
+void DhtClient::invoke_peer_callback(const std::string& info_hash_hex,
+                                     const std::string& ip,
+                                     uint16_t port)
+{
+    PeerCallback cb;
+    {
+        std::lock_guard<std::mutex> lk(callback_mutex_);
+        cb = peer_cb_;
+    }
+    if (cb)
+        cb(info_hash_hex, ip, port);
 }
 
 void DhtClient::stop()
@@ -139,9 +177,9 @@ void DhtClient::add_krpc_logger(std::shared_ptr<logger::Logger> logger)
 }
 
 void DhtClient::log_krpc(const char* direction,
-                       const std::string& msg,
-                       const std::string& ip,
-                       uint16_t port) const
+                         const std::string& msg,
+                         const std::string& ip,
+                         uint16_t port) const
 {
     auto parsed = parse_krpc(msg);
     if (parsed)
@@ -162,9 +200,9 @@ void DhtClient::log_krpc(const char* direction,
 }
 
 void DhtClient::log_krpc(const char* direction,
-                       const KrpcMessage& msg,
-                       const std::string& ip,
-                       uint16_t port) const
+                         const KrpcMessage& msg,
+                         const std::string& ip,
+                         uint16_t port) const
 {
     std::ostringstream line;
     line << direction << ' ' << ip << ':' << port << ' '
@@ -178,19 +216,50 @@ void DhtClient::log_krpc(const char* direction,
     }
 }
 
+void DhtClient::log_dht_info(const std::string& message) const
+{
+    std::lock_guard<std::mutex> lk(krpc_loggers_mutex_);
+    for (const auto& logger : krpc_loggers_)
+    {
+        if (logger)
+            logger->info("[DHT] " + message);
+    }
+}
+
 void DhtClient::get_peers(const std::string& info_hash_20)
 {
+    if (info_hash_20.size() != 20)
+        return;
+
     std::vector<RoutingEntry> closest;
     {
         std::lock_guard<std::mutex> lk(table_mutex_);
         closest = routing_table_.closest(NodeId::from_string(info_hash_20), 8);
     }
 
+    if (closest.empty())
+        return;
+
     std::string txn = random_txn();
+    {
+        std::lock_guard<std::mutex> lk(peers_mutex_);
+        expire_pending_lookups();
+        pending_lookups_[txn] = {info_hash_20,
+                                 std::chrono::steady_clock::now()};
+    }
+    peer_store_.ensure_bucket(info_hash_20);
+
     std::string msg = make_get_peers(txn, self_id_, info_hash_20);
 
     for (const auto& node : closest)
         send_krpc(msg, node.ip, node.port);
+}
+
+void DhtClient::ping(const std::string& ip, uint16_t port)
+{
+    if (ip.empty())
+        return;
+    send_krpc(make_ping(random_txn(), self_id_), ip, port);
 }
 
 void DhtClient::announce(const std::string& info_hash_20, uint16_t port)
@@ -224,8 +293,8 @@ void DhtClient::announce(const std::string& info_hash_20, uint16_t port)
 // ---------------------------------------------------------------------------
 
 void DhtClient::send_krpc(const std::string& msg,
-                        const std::string& ip,
-                        uint16_t port)
+                          const std::string& ip,
+                          uint16_t port)
 {
     if (!socket_ || socket_->get_fd() == -1 || ip.empty())
         return;
@@ -236,9 +305,10 @@ void DhtClient::send_krpc(const std::string& msg,
     {
         socket_->sendto(msg, IPv4Address(ip, port));
     }
-    catch (const std::exception&)
+    catch (const std::exception& e)
     {
-        // Invalid address or send error – silently drop.
+        log_dht_info("send failed to " + ip + ":" + std::to_string(port) +
+                     ": " + e.what());
     }
 }
 
@@ -264,7 +334,15 @@ void DhtClient::recv_loop()
 
             auto parsed = parse_krpc(data);
             if (!parsed)
+            {
+                if (routing_table_size() == 0)
+                {
+                    log_dht_info("recv unparsed UDP " +
+                                 std::to_string(data.size()) + " bytes from " +
+                                 src_ip + ":" + std::to_string(src_port));
+                }
                 continue;
+            }
 
             handle_message(*parsed, src_ip, src_port);
         }
@@ -276,8 +354,8 @@ void DhtClient::recv_loop()
 }
 
 void DhtClient::handle_message(const KrpcMessage& msg,
-                             const std::string& src_ip,
-                             uint16_t src_port)
+                               const std::string& src_ip,
+                               uint16_t src_port)
 {
     log_krpc("RECV <-", msg, src_ip, src_port);
 
@@ -332,15 +410,15 @@ void DhtClient::handle_message(const KrpcMessage& msg,
 // ---------------------------------------------------------------------------
 
 void DhtClient::on_ping(const KrpcMessage& msg,
-                      const std::string& src_ip,
-                      uint16_t src_port)
+                        const std::string& src_ip,
+                        uint16_t src_port)
 {
     send_krpc(make_response(msg.txn, self_id_), src_ip, src_port);
 }
 
 void DhtClient::on_find_node(const KrpcMessage& msg,
-                           const std::string& src_ip,
-                           uint16_t src_port)
+                             const std::string& src_ip,
+                             uint16_t src_port)
 {
     std::vector<RoutingEntry> closest;
     {
@@ -352,20 +430,16 @@ void DhtClient::on_find_node(const KrpcMessage& msg,
 }
 
 void DhtClient::on_get_peers(const KrpcMessage& msg,
-                           const std::string& src_ip,
-                           uint16_t src_port)
+                             const std::string& src_ip,
+                             uint16_t src_port)
 {
     rotate_token_if_needed();
     std::string token = current_token();
 
-    // Check if we know any peers for this info_hash.
-    std::vector<std::string> known_peers;
-    {
-        std::lock_guard<std::mutex> lk(peers_mutex_);
-        auto it = peer_store_.find(msg.info_hash);
-        if (it != peer_store_.end())
-            known_peers = it->second;
-    }
+    // Check if we know any live peers for this info_hash.
+    peer_store_.expire_stale();
+    const std::vector<std::string> known_peers =
+        peer_store_.live_peers(msg.info_hash);
 
     if (!known_peers.empty())
     {
@@ -388,8 +462,8 @@ void DhtClient::on_get_peers(const KrpcMessage& msg,
 }
 
 void DhtClient::on_announce_peer(const KrpcMessage& msg,
-                               const std::string& src_ip,
-                               uint16_t src_port)
+                                 const std::string& src_ip,
+                                 uint16_t src_port)
 {
     // Verify the token.
     if (!verify_token(msg.token))
@@ -398,24 +472,12 @@ void DhtClient::on_announce_peer(const KrpcMessage& msg,
         return;
     }
 
-    // Store the peer.
     uint16_t peer_port = msg.implied_port ? src_port : msg.peer_port;
     std::string compact = peer_to_compact(src_ip, peer_port);
-    {
-        std::lock_guard<std::mutex> lk(peers_mutex_);
-        peer_store_[msg.info_hash].push_back(compact);
-    }
+    peer_store_.upsert(msg.info_hash, compact);
 
     // Fire the callback so the torrent layer learns about this peer.
-    if (peer_cb_)
-    {
-        // Convert info_hash to hex for a human-readable key.
-        std::ostringstream oss;
-        oss << std::hex << std::setfill('0');
-        for (unsigned char c : msg.info_hash)
-            oss << std::setw(2) << static_cast<unsigned>(c);
-        peer_cb_(oss.str(), src_ip, peer_port);
-    }
+    invoke_peer_callback(info_hash_bytes_to_hex(msg.info_hash), src_ip, peer_port);
 
     send_krpc(make_response(msg.txn, self_id_), src_ip, src_port);
 }
@@ -425,8 +487,8 @@ void DhtClient::on_announce_peer(const KrpcMessage& msg,
 // ---------------------------------------------------------------------------
 
 void DhtClient::on_response(const KrpcMessage& msg,
-                          const std::string& src_ip,
-                          uint16_t src_port)
+                            const std::string& src_ip,
+                            uint16_t src_port)
 {
     // Add any nodes we received to the routing table.
     {
@@ -443,30 +505,32 @@ void DhtClient::on_response(const KrpcMessage& msg,
         received_tokens_[key] = msg.token;
     }
 
-    // Deliver any peers to the callback.
-    if (peer_cb_ && !msg.peers.empty())
-    {
-        // Reconstruct the info_hash from whatever we last asked about.
-        // For now we fire the callback with the raw hex of the sender ID
-        // (sufficient for the torrent layer to match by info_hash it queried).
-        // A production implementation would correlate by transaction_id.
-        for (const auto& compact : msg.peers)
-        {
-            std::string peer_ip;
-            uint16_t peer_port = 0;
-            if (compact_to_peer(compact, 0, peer_ip, peer_port))
-            {
-                // Store the peer in the peer_store_.
-                // We don't know which info_hash this came from here without
-                // a txn->info_hash map, so we store in all active info_hashes.
-                std::lock_guard<std::mutex> lk(peers_mutex_);
-                for (auto& [ih, peers] : peer_store_)
-                    peers.push_back(compact);
+    if (msg.peers.empty())
+        return;
 
-                if (peer_cb_)
-                    peer_cb_("", peer_ip, peer_port);
-            }
+    std::string info_hash_20;
+    {
+        std::lock_guard<std::mutex> lk(peers_mutex_);
+        auto it = pending_lookups_.find(msg.txn);
+        if (it == pending_lookups_.end())
+            return;
+        info_hash_20 = it->second.first;
+    }
+
+    const std::string info_hash_hex = info_hash_bytes_to_hex(info_hash_20);
+
+    for (const auto& compact : msg.peers)
+    {
+        std::string peer_ip;
+        uint16_t peer_port = 0;
+        if (!compact_to_peer(compact, 0, peer_ip, peer_port))
+            continue;
+
+        {
+            peer_store_.upsert(info_hash_20, compact);
         }
+
+        invoke_peer_callback(info_hash_hex, peer_ip, peer_port);
     }
 }
 
@@ -476,6 +540,9 @@ void DhtClient::on_response(const KrpcMessage& msg,
 
 void DhtClient::bootstrap()
 {
+    last_bootstrap_attempt_ = std::chrono::steady_clock::now();
+    log_dht_info("bootstrapping (" + std::to_string(BOOTSTRAP_NODES.size()) +
+                 " nodes)");
     for (const auto& [host, port] : BOOTSTRAP_NODES)
         ping_bootstrap(host, port);
 }
@@ -495,14 +562,20 @@ void DhtClient::ping_bootstrap(const std::string& host, uint16_t port)
             }
         }
     }
-    catch (const std::exception&)
+    catch (const std::exception& e)
     {
+        log_dht_info("bootstrap DNS failed for " + host + ": " + e.what());
         return;
     }
 
     if (ip.empty())
+    {
+        log_dht_info("bootstrap DNS returned no IPv4 for " + host);
         return;
+    }
 
+    log_dht_info("bootstrap " + host + " -> " + ip + ":" +
+                 std::to_string(port));
     std::string txn = random_txn();
     send_krpc(make_ping(txn, self_id_), ip, port);
 
@@ -529,8 +602,46 @@ void DhtClient::maintenance_loop()
 
         lk.unlock();
         rotate_token_if_needed();
+        {
+            std::lock_guard<std::mutex> peers_lk(peers_mutex_);
+            expire_pending_lookups();
+        }
+        peer_store_.expire_stale();
         refresh_buckets();
+
+        if (routing_table_size() == 0)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_bootstrap_attempt_ >= BOOTSTRAP_RETRY_INTERVAL)
+            {
+                log_dht_info("routing table empty; retrying bootstrap");
+                bootstrap();
+                if (!bootstrap_connectivity_warned_)
+                {
+                    bootstrap_connectivity_warned_ = true;
+                    log_dht_info(
+                        "no bootstrap replies received; outbound KRPC works "
+                        "but "
+                        "inbound UDP may be blocked (VPN/firewall/NAT). Try "
+                        "without corporate VPN or allow inbound UDP on port " +
+                        std::to_string(port_));
+                }
+            }
+        }
+
         lk.lock();
+    }
+}
+
+void DhtClient::expire_pending_lookups()
+{
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = pending_lookups_.begin(); it != pending_lookups_.end();)
+    {
+        if (now - it->second.second >= PENDING_LOOKUP_TTL)
+            it = pending_lookups_.erase(it);
+        else
+            ++it;
     }
 }
 

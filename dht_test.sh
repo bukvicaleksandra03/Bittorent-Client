@@ -9,5 +9,5 @@ make test_dht_get_peers_from_torrent
 # Quick test (stops after finding the first peer, ~60 s)
 # RUN_DHT_PEER_DISCOVERY_TEST=1 ./out/test_dht_get_peers_from_torrent --gtest_filter='DhtPeerDiscovery.GetPeersFromRealTorrent'
 
-# Long test (full lookup, writes dht.log, ~120 s)
+# Long test (full lookup, writes logs/dht.log, ~120 s)
 RUN_DHT_PEER_DISCOVERY_LONG_TEST=1 ./out/test_dht_get_peers_from_torrent --gtest_filter='DhtPeerDiscovery.GetPeersFromRealTorrentLong'

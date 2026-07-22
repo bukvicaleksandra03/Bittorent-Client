@@ -98,8 +98,9 @@ struct KrpcMessage
     bool implied_port{false};  // announce_peer
 
     // Response fields
-    std::vector<RoutingEntry> nodes;  // compact node list (nodes / find_node)
-    std::vector<std::string> peers;   // compact peer list (get_peers)
+    std::vector<RoutingEntry> nodes;       // unique compact nodes (nodes / find_node)
+    std::vector<size_t> node_counts;       // wire repeat count per nodes[i]
+    std::vector<std::string> peers;        // compact peer list (get_peers)
 
     // Error fields
     int error_code{0};

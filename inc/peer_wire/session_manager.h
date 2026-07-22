@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "logger.h"
 #include "net/upnp.h"
 
 namespace dht
@@ -90,4 +91,8 @@ class SessionManager
 
     // DHT client — one per session, shared across all torrents.
     std::unique_ptr<dht::DhtClient> m_dht_client;
+
+    // Shared DHT/KRPC log: <log_output_dir>/dht.log (one file for all torrents).
+    std::string m_log_output_dir;
+    std::shared_ptr<logger::Logger> m_dht_logger;
 };

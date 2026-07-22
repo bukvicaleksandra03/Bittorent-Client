@@ -19,8 +19,8 @@
 //   default: 60,
 //                                long default: 120)
 //
-// The long test writes KRPC traffic to logs/<sanitized-torrent-name>/dht.log
-// under the project root (same naming as TorrentManager).
+// The long test writes KRPC traffic to logs/dht.log under the project root
+// (same path as SessionManager's shared DHT logger).
 //
 // Use torrent_files/unparsed_torrents/*.torrent (real bencode). Files under
 // torrent_files/torrent_file_objects/ are text metadata dumps, not .torrents.
@@ -58,7 +58,7 @@ fs::path project_root()
 std::string default_torrent_path()
 {
     return (project_root() / "torrent_files" / "unparsed_torrents" /
-            "ubuntu-25.10-desktop-amd64.iso.torrent")
+            "annakarenina_mas_1202_librivox_archive.torrent")
         .string();
 }
 
@@ -66,24 +66,6 @@ std::string info_hash_20(const TorrentFile& torrent)
 {
     const auto& h = torrent.get_info_hash();
     return std::string(reinterpret_cast<const char*>(h.data()), h.size());
-}
-
-std::string sanitize_filename(const std::string& name)
-{
-    std::string out;
-    out.reserve(name.size());
-    for (unsigned char c : name)
-    {
-        if (std::isalnum(c) || c == '-' || c == '_' || c == '.')
-        {
-            out += static_cast<char>(c);
-        }
-        else
-        {
-            out += '_';
-        }
-    }
-    return out;
 }
 
 bool wait_for_routing_table(dht::DhtClient& client,
@@ -142,8 +124,7 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
         auto krpc_logger = std::make_shared<logger::Logger>();
         krpc_logger->set_level(logger::Level::INFO);
         krpc_logger->set_prefix(" KRPC ");
-        const fs::path log_dir =
-            project_root() / "logs" / sanitize_filename(torrent_name);
+        const fs::path log_dir = project_root() / "logs";
         fs::create_directories(log_dir);
         if (fs::exists(log_dir / "dht.log"))
         {

@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "dht/dht_peer_store.h"
 #include "dht/krpc.h"
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
@@ -62,13 +63,13 @@ class DhtClient
     }
 
     // Register a callback that fires when peers are found for a torrent.
-    void set_peer_callback(PeerCallback cb)
-    {
-        peer_cb_ = std::move(cb);
-    }
+    void set_peer_callback(PeerCallback cb);
 
     // Start (or refresh) a get_peers lookup for the given 20-byte info hash.
     void get_peers(const std::string& info_hash_20);
+
+    // Send a ping to a specific node (useful for loopback bootstrap / tests).
+    void ping(const std::string& ip, uint16_t port);
 
     // Announce that we are a peer for the given info hash on the given port.
     // Typically called after a get_peers lookup has returned tokens.
@@ -140,6 +141,11 @@ class DhtClient
     // Refresh buckets that haven't been touched recently.
     void refresh_buckets();
 
+    // Drop get_peers transaction bindings that have expired.
+    void expire_pending_lookups();
+
+    void log_dht_info(const std::string& message) const;
+
     // ---- Token management (Step 6) ----------------------------------------
     //
     // Tokens are short secrets returned in get_peers responses.  A remote
@@ -161,11 +167,13 @@ class DhtClient
     mutable std::mutex table_mutex_;
     RoutingTable routing_table_;
 
-    // info_hash (20 bytes) -> list of compact peer strings (6 bytes each)
-    // that we know about but haven't yet announced.
-    std::unordered_map<std::string, std::vector<std::string>> peer_store_;
+    DhtPeerStore peer_store_;
     // tokens returned by remote nodes keyed by "ip:port"
     std::unordered_map<std::string, std::string> received_tokens_;
+    // KRPC transaction id -> info_hash (20 bytes) for in-flight get_peers lookups.
+    std::unordered_map<std::string, std::pair<std::string,
+                                              std::chrono::steady_clock::time_point>>
+        pending_lookups_;
     mutable std::mutex peers_mutex_;
 
     // Token rotation
@@ -184,7 +192,16 @@ class DhtClient
     std::thread recv_thread_;
     std::thread maint_thread_;
 
+    std::chrono::steady_clock::time_point last_bootstrap_attempt_{};
+    bool bootstrap_connectivity_warned_{false};
+    static constexpr auto BOOTSTRAP_RETRY_INTERVAL = std::chrono::minutes(2);
+
     PeerCallback peer_cb_;
+    mutable std::mutex callback_mutex_;
+
+    void invoke_peer_callback(const std::string& info_hash_hex,
+                              const std::string& ip,
+                              uint16_t port);
 
     mutable std::mutex krpc_loggers_mutex_;
     std::vector<std::shared_ptr<logger::Logger>> krpc_loggers_;

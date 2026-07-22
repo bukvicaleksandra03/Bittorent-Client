@@ -8,13 +8,19 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <iomanip>
+#include <mutex>
+#include <sstream>
 #include <thread>
+#include <unordered_map>
 
 #include "dht/dht_client.h"
 #include "dht/krpc.h"
 #include "dht/node_id.h"
 #include "net/socket.h"
 #include "net/socket_addresses.h"
+#include "peer_address.h"
 
 namespace
 {
@@ -39,6 +45,63 @@ bool wait_for_routing_table(dht::DhtClient& client,
     return client.routing_table_size() >= min_size;
 }
 
+std::string info_hash_hex_from_byte(char byte)
+{
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0') << std::setw(2)
+        << static_cast<unsigned>(static_cast<unsigned char>(byte));
+    return oss.str();
+}
+
+std::string repeated_info_hash_hex(char byte)
+{
+    const std::string pair = info_hash_hex_from_byte(byte);
+    std::string hex;
+    hex.reserve(40);
+    for (int i = 0; i < 20; ++i)
+        hex += pair;
+    return hex;
+}
+
+bool seed_peer_on_server(uint16_t server_port,
+                         const std::string& info_hash_20,
+                         const std::string& peer_ip,
+                         uint16_t peer_port)
+{
+    (void)peer_ip;  // announce_peer records the UDP source address
+    dht::NodeId announcer_id = dht::NodeId::random();
+    UDPSocket sock(AF_INET);
+    sock.bind(IPv4Address("0.0.0.0", 0));
+
+    const std::string txn = dht::random_txn();
+    sock.sendto(dht::make_get_peers(txn, announcer_id, info_hash_20),
+                IPv4Address("127.0.0.1", server_port));
+
+    std::string token;
+    try
+    {
+        auto [data, addr] = sock.recvfrom_with_timeout(2000);
+        (void)addr;
+        auto parsed = dht::parse_krpc(data);
+        if (!parsed || parsed->token.empty())
+            return false;
+        token = parsed->token;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+
+    sock.sendto(dht::make_announce_peer(dht::random_txn(),
+                                        announcer_id,
+                                        info_hash_20,
+                                        peer_port,
+                                        token,
+                                        false),
+                IPv4Address("127.0.0.1", server_port));
+    return true;
+}
+
 }  // namespace
 
 TEST(DhtClient, LocalPingPopulatesRoutingTable)
@@ -60,11 +123,137 @@ TEST(DhtClient, LocalPingPopulatesRoutingTable)
     server.stop();
 }
 
+TEST(DhtClient, GetPeersRoutesByTransactionId)
+{
+    const uint16_t server_port = static_cast<uint16_t>(next_loopback_port());
+    const uint16_t peer_port = static_cast<uint16_t>(next_loopback_port());
+
+    const std::string info_hash(20, '\x42');
+    const std::string expected_hex = repeated_info_hash_hex('\x42');
+
+    dht::DhtClient server(server_port);
+    server.start();
+    ASSERT_TRUE(server.is_running());
+
+    ASSERT_TRUE(seed_peer_on_server(
+        server_port, info_hash, "127.0.0.1", peer_port));
+
+    dht::DhtClient lookup_client(0);
+    lookup_client.start();
+    ASSERT_TRUE(lookup_client.is_running());
+
+    lookup_client.ping("127.0.0.1", server_port);
+    ASSERT_TRUE(wait_for_routing_table(
+        lookup_client, 1, std::chrono::seconds(2)));
+
+    std::mutex mu;
+    std::condition_variable cv;
+    std::string cb_hash;
+    std::string cb_ip;
+    uint16_t cb_port = 0;
+    bool got_peer = false;
+
+    lookup_client.set_peer_callback(
+        [&](const std::string& hash_hex,
+            const std::string& ip,
+            uint16_t port)
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            cb_hash = hash_hex;
+            cb_ip = ip;
+            cb_port = port;
+            got_peer = true;
+            cv.notify_all();
+        });
+
+    lookup_client.get_peers(info_hash);
+
+    {
+        std::unique_lock<std::mutex> lk(mu);
+        EXPECT_TRUE(cv.wait_for(
+            lk, std::chrono::seconds(2), [&] { return got_peer; }));
+    }
+
+    EXPECT_EQ(cb_hash, expected_hex);
+    EXPECT_EQ(cb_ip, "127.0.0.1");
+    EXPECT_EQ(cb_port, peer_port);
+
+    lookup_client.stop();
+    server.stop();
+}
+
+TEST(DhtClient, GetPeersSeparatesMultipleInfoHashes)
+{
+    const uint16_t server_port = static_cast<uint16_t>(next_loopback_port());
+    const uint16_t peer_port_a = static_cast<uint16_t>(next_loopback_port());
+    const uint16_t peer_port_b = static_cast<uint16_t>(next_loopback_port());
+
+    const std::string hash_a(20, '\x11');
+    const std::string hash_b(20, '\x22');
+    const std::string hex_a = repeated_info_hash_hex('\x11');
+    const std::string hex_b = repeated_info_hash_hex('\x22');
+
+    dht::DhtClient server(server_port);
+    server.start();
+
+    ASSERT_TRUE(seed_peer_on_server(
+        server_port, hash_a, "127.0.0.1", peer_port_a));
+    ASSERT_TRUE(seed_peer_on_server(
+        server_port, hash_b, "127.0.0.1", peer_port_b));
+
+    dht::DhtClient lookup_client(0);
+    lookup_client.start();
+    lookup_client.ping("127.0.0.1", server_port);
+    ASSERT_TRUE(wait_for_routing_table(
+        lookup_client, 1, std::chrono::seconds(2)));
+
+    std::mutex mu;
+    std::condition_variable cv;
+    std::unordered_map<std::string, uint16_t> seen_ports;
+    int callback_count = 0;
+
+    lookup_client.set_peer_callback(
+        [&](const std::string& hash_hex,
+            const std::string& ip,
+            uint16_t port)
+        {
+            if (ip != "127.0.0.1")
+                return;
+            std::lock_guard<std::mutex> lk(mu);
+            seen_ports[hash_hex] = port;
+            ++callback_count;
+            cv.notify_all();
+        });
+
+    lookup_client.get_peers(hash_a);
+    lookup_client.get_peers(hash_b);
+
+    {
+        std::unique_lock<std::mutex> lk(mu);
+        EXPECT_TRUE(cv.wait_for(
+            lk,
+            std::chrono::seconds(2),
+            [&] { return callback_count >= 2; }));
+    }
+
+    EXPECT_EQ(seen_ports[hex_a], peer_port_a);
+    EXPECT_EQ(seen_ports[hex_b], peer_port_b);
+
+    lookup_client.stop();
+    server.stop();
+}
+
 TEST(DhtClient, BootstrapPopulatesTable)
 {
     dht::DhtClient client(0);
     client.start();
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    const bool populated =
+        wait_for_routing_table(client, 1, std::chrono::seconds(8));
+    if (!populated)
+    {
+        client.stop();
+        GTEST_SKIP() << "public DHT bootstrap unreachable (network/VPN/firewall)";
+    }
     EXPECT_GT(client.routing_table_size(), 0u);
     client.stop();
 }

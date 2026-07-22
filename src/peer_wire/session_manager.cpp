@@ -5,10 +5,14 @@
 #include <iostream>
 #include <thread>
 
+#include <filesystem>
+
 #include "dht/dht_client.h"
 #include "peer_address.h"
 #include "peer_wire/torrent_manager.h"
 #include "utils.h"
+
+namespace fs = std::filesystem;
 
 namespace
 {
@@ -35,9 +39,9 @@ void SessionManager::add(std::unique_ptr<TorrentManager> manager)
         return;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_dht_client && m_dht_client->is_running())
+    if (m_log_output_dir.empty())
     {
-        m_dht_client->add_krpc_logger(manager->krpc_logger());
+        m_log_output_dir = manager->log_output_dir();
     }
     m_sessions.push_back(std::move(manager));
 }
@@ -91,6 +95,30 @@ void SessionManager::start_all()
                 }
             });
 
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const std::string log_dir =
+                m_log_output_dir.empty() ? "logs" : m_log_output_dir;
+            fs::create_directories(log_dir);
+            const fs::path dht_log_path = fs::path(log_dir) / "dht.log";
+            if (fs::exists(dht_log_path))
+            {
+                fs::remove(dht_log_path);
+            }
+
+            logger::Level level = logger::Level::DEBUG;
+            if (!m_sessions.empty() && m_sessions.front())
+            {
+                level = m_sessions.front()->log_level();
+            }
+
+            m_dht_logger = std::make_shared<logger::Logger>();
+            m_dht_logger->set_level(level);
+            m_dht_logger->set_prefix("KRPC ");
+            m_dht_logger->set_file(dht_log_path.string());
+            m_dht_client->add_krpc_logger(m_dht_logger);
+        }
+
         m_dht_client->start();
         std::cout << "[SessionManager] DHT: started on port " << m_listen_port
                   << " (node id: " << m_dht_client->self_id().hex() << ")\n";
@@ -103,7 +131,6 @@ void SessionManager::start_all()
         {
             if (s)
             {
-                m_dht_client->add_krpc_logger(s->krpc_logger());
                 m_dht_client->get_peers(s->info_hash_str());
                 s->start();
             }
