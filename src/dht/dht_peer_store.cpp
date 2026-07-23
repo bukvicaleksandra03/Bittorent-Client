@@ -13,12 +13,10 @@ void DhtPeerStore::expire_stale()
     {
         auto& peers = map_it->second.peers;
         peers.erase(
-            std::remove_if(
-                peers.begin(),
-                peers.end(),
-                [&](const PeerEntry& e) {
-                    return now - e.last_seen >= PEER_ENTRY_TTL;
-                }),
+            std::remove_if(peers.begin(),
+                           peers.end(),
+                           [&](const PeerEntry& e)
+                           { return now - e.last_seen >= PEER_ENTRY_TTL; }),
             peers.end());
 
         if (peers.empty())
@@ -36,7 +34,8 @@ void DhtPeerStore::evict_lru_if_at_capacity()
     auto lru = buckets_.end();
     for (auto it = buckets_.begin(); it != buckets_.end(); ++it)
     {
-        if (lru == buckets_.end() || it->second.last_seen < lru->second.last_seen)
+        if (lru == buckets_.end() ||
+            it->second.last_seen < lru->second.last_seen)
             lru = it;
     }
 
@@ -89,7 +88,8 @@ void DhtPeerStore::upsert(const std::string& info_hash,
     if (peers.size() >= MAX_PEERS_PER_HASH)
     {
         auto oldest = peers.begin();
-        for (auto peer_it = peers.begin() + 1; peer_it != peers.end(); ++peer_it)
+        for (auto peer_it = peers.begin() + 1; peer_it != peers.end();
+             ++peer_it)
         {
             if (peer_it->last_seen < oldest->last_seen)
                 oldest = peer_it;

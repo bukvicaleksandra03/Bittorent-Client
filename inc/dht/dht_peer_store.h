@@ -9,10 +9,14 @@
 namespace dht
 {
 
-// Per-info-hash peer list with TTL and LRU eviction (BEP 5 announce_peer storage).
+// Per-info-hash peer list with TTL and LRU eviction (BEP 5 announce_peer
+// storage).
 class DhtPeerStore
 {
    public:
+    // Record or refresh a compact peer (6-byte ip:port) for info_hash;
+    // creates the bucket if needed, evicts LRU info-hash at global cap,
+    // and replaces the oldest peer when the per-hash list is full.
     void upsert(const std::string& info_hash, const std::string& compact);
 
     // Non-expired compact peer strings for info_hash; refreshes bucket LRU.
@@ -33,11 +37,7 @@ class DhtPeerStore
 
     static constexpr auto PEER_ENTRY_TTL = std::chrono::minutes(30);
     static constexpr size_t MAX_PEERS_PER_HASH = 50;
-#ifndef DHT_MAX_INFO_HASHES
     static constexpr size_t MAX_INFO_HASHES = 10000;
-#else
-    static constexpr size_t MAX_INFO_HASHES = DHT_MAX_INFO_HASHES;
-#endif
 
     struct HashBucket
     {

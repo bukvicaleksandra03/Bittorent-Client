@@ -76,29 +76,10 @@ MANUAL_TEST_BINS = $(OUT_DIR)/test_single_torrent \
                    $(OUT_DIR)/test_dht_get_peers_from_torrent
 FAST_TEST_BINS = $(filter-out $(SLOW_TEST_BINS) $(MANUAL_TEST_BINS),$(TEST_BINS))
 
-# Build standard test binaries from library objects. test_dht_peer_store has its
-# own link rule (alternate dht_client.o); do not use a pattern rule here or make
-# merges OBJECTS into that target and may delete dht_client.o as intermediate.
-STANDARD_TEST_BINS = $(filter-out $(OUT_DIR)/test_dht_peer_store,$(TEST_BINS))
-
-$(STANDARD_TEST_BINS): $(OBJECTS)
+$(TEST_BINS): $(OBJECTS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INC_DIR) $(OBJECTS) \
 		$$(find $(TEST_DIR) -name '$(notdir $@).cpp') -o $@ $(LDFLAGS)
-
-# test_dht_peer_store recompiles dht_peer_store with a small hash cap for LRU tests.
-DHT_PEER_STORE_TEST_OBJ = $(OBJ_DIR)/src/dht/dht_peer_store_peer_store_test.o
-DHT_PEER_STORE_TEST_OBJECTS = $(filter-out $(OBJ_DIR)/src/dht/dht_peer_store.o,$(OBJECTS)) \
-                              $(DHT_PEER_STORE_TEST_OBJ)
-
-$(OBJ_DIR)/src/dht/dht_peer_store_peer_store_test.o: src/dht/dht_peer_store.cpp
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -DDHT_MAX_INFO_HASHES=4 $(INC_DIR) -c $< -o $@
-
-$(OUT_DIR)/test_dht_peer_store: $(DHT_PEER_STORE_TEST_OBJECTS)
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(INC_DIR) $(DHT_PEER_STORE_TEST_OBJECTS) \
-		$$(find $(TEST_DIR) -name 'test_dht_peer_store.cpp') -o $@ $(LDFLAGS)
 
 # Keep binaries when building via `make test_foo` (otherwise make treats
 # out/test_foo as an intermediate and deletes it after the alias target).
