@@ -46,6 +46,7 @@ SOURCES = $(SRC_DIR)/net/socket.cpp \
           $(SRC_DIR)/dht/routing_table.cpp \
           $(SRC_DIR)/dht/krpc.cpp \
           $(SRC_DIR)/dht/dht_peer_store.cpp \
+          $(SRC_DIR)/dht/kademlia_lookup.cpp \
           $(SRC_DIR)/dht/dht_client.cpp
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 

@@ -7,17 +7,18 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include "dht/dht_peer_store.h"
+#include "dht/kademlia_lookup.h"
 #include "dht/krpc.h"
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
 #include "logger.h"
+#include "peer_address.h"
 
 class UDPSocket;
 
@@ -26,8 +27,8 @@ namespace dht
 
 // Callback fired whenever a get_peers lookup yields live peers.
 // Arguments: info_hash (hex string), ip, port.
-using PeerCallback = std::function<void(
-    const std::string& info_hash_hex, const std::string& ip, uint16_t port)>;
+using PeerCallback =
+    std::function<void(const std::string& info_hash_hex, PeerAddress pa)>;
 
 // ---------------------------------------------------------------------------
 // DhtClient – the public interface to the DHT subsystem.
@@ -82,7 +83,7 @@ class DhtClient
     void unregister_torrent(const std::string& info_hash_20);
 
     // Send a ping to a specific node (useful for loopback bootstrap / tests).
-    void ping(const std::string& ip, uint16_t port);
+    void ping(PeerAddress pa);
 
     // Announce to every node that has returned a token.  Prefer
     // register_torrent() for long-lived seeding sessions.
@@ -104,44 +105,28 @@ class DhtClient
    private:
     // ---- Network I/O -------------------------------------------------------
 
-    void send_krpc(const std::string& msg,
-                   const std::string& ip,
-                   uint16_t port);
+    void send_krpc(const std::string& msg, PeerAddress pa);
 
     void log_krpc(const char* direction,
                   const std::string& msg,
-                  const std::string& ip,
-                  uint16_t port) const;
+                  PeerAddress pa) const;
 
     void log_krpc(const char* direction,
                   const KrpcMessage& msg,
-                  const std::string& ip,
-                  uint16_t port) const;
+                  PeerAddress pa) const;
 
     // Background thread: receive datagrams and dispatch them.
     void recv_loop();
 
     // Dispatch a parsed KRPC message.
-    void handle_message(const KrpcMessage& msg,
-                        const std::string& src_ip,
-                        uint16_t src_port);
+    void handle_message(const KrpcMessage& msg, PeerAddress pa);
 
     // Handlers for each KRPC type.
-    void on_ping(const KrpcMessage& msg,
-                 const std::string& src_ip,
-                 uint16_t src_port);
-    void on_find_node(const KrpcMessage& msg,
-                      const std::string& src_ip,
-                      uint16_t src_port);
-    void on_get_peers(const KrpcMessage& msg,
-                      const std::string& src_ip,
-                      uint16_t src_port);
-    void on_announce_peer(const KrpcMessage& msg,
-                          const std::string& src_ip,
-                          uint16_t src_port);
-    void on_response(const KrpcMessage& msg,
-                     const std::string& src_ip,
-                     uint16_t src_port);
+    void on_ping(const KrpcMessage& msg, PeerAddress pa);
+    void on_find_node(const KrpcMessage& msg, PeerAddress pa);
+    void on_get_peers(const KrpcMessage& msg, PeerAddress pa);
+    void on_announce_peer(const KrpcMessage& msg, PeerAddress pa);
+    void on_response(const KrpcMessage& msg, PeerAddress pa);
 
     // ---- Bootstrap / maintenance ------------------------------------------
 
@@ -163,31 +148,11 @@ class DhtClient
     // Periodic get_peers + announce_peer for registered torrents.
     void maintain_registered_torrents();
 
-    // ---- Iterative get_peers (Kademlia) ------------------------------------
-
-    struct LookupState
-    {
-        std::string info_hash_20;
-        NodeId target;
-        std::vector<RoutingEntry> candidates;
-        std::set<std::string> queried;
-        std::set<std::string> pending_txns;
-        std::chrono::steady_clock::time_point started{};
-    };
-
     struct OutboundKrpc
     {
         std::string msg;
-        std::string ip;
-        uint16_t port{0};
+        PeerAddress pa;
     };
-
-    static std::string addr_key(const std::string& ip, uint16_t port);
-
-    void merge_nodes_into_lookup(LookupState& state,
-                                 const std::vector<RoutingEntry>& nodes);
-
-    bool all_closest_queried(const LookupState& state) const;
 
     void finish_lookup(const std::string& info_hash_20);
 
@@ -198,14 +163,11 @@ class DhtClient
                             const std::string& info_hash_20);
 
     // If msg.txn belongs to a registered torrent, announce to the responder.
-    void maybe_announce_registered(const KrpcMessage& msg,
-                                   const std::string& src_ip,
-                                   uint16_t src_port);
+    void maybe_announce_registered(const KrpcMessage& msg, PeerAddress pa);
 
     void announce_to_node(const std::string& info_hash_20,
                           uint16_t listen_port,
-                          const std::string& ip,
-                          uint16_t node_port,
+                          PeerAddress pa,
                           const std::string& token);
 
     void log_dht_info(const std::string& message) const;
@@ -232,8 +194,7 @@ class DhtClient
     RoutingTable routing_table_;
 
     DhtPeerStore peer_store_;
-    // tokens returned by remote nodes keyed by "ip:port"
-    std::unordered_map<std::string, std::string> received_tokens_;
+    std::unordered_map<PeerAddress, std::string> received_tokens_;
     // KRPC transaction id -> info_hash (20 bytes) for in-flight get_peers
     // lookups.
     std::unordered_map<
@@ -242,7 +203,7 @@ class DhtClient
         pending_lookups_;
 
     // One iterative Kademlia lookup per info hash (keyed by 20-byte hash).
-    std::unordered_map<std::string, LookupState> active_lookups_;
+    std::unordered_map<std::string, KademliaLookup> active_lookups_;
 
     static constexpr size_t LOOKUP_ALPHA = 3;
 
@@ -286,9 +247,7 @@ class DhtClient
     PeerCallback peer_cb_;
     mutable std::mutex callback_mutex_;
 
-    void invoke_peer_callback(const std::string& info_hash_hex,
-                              const std::string& ip,
-                              uint16_t port);
+    void invoke_peer_callback(const std::string& info_hash_hex, PeerAddress pa);
 
     // Protects dht_logger_ assignment; log calls rely on Logger::m_log_mutex.
     mutable std::mutex dht_logger_mutex_;

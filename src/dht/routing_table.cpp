@@ -6,6 +6,8 @@
 #include <cstring>
 #include <random>
 
+#include "peer_address.h"
+
 namespace dht
 {
 
@@ -28,9 +30,9 @@ std::string RoutingEntry::compact() const
     struct in_addr addr
     {
     };
-    inet_aton(ip.c_str(), &addr);
+    inet_aton(pa.ip.c_str(), &addr);
     std::memcpy(out.data() + 20, &addr.s_addr, 4);
-    uint16_t port_be = htons(port);
+    uint16_t port_be = htons(pa.port);
     std::memcpy(out.data() + 24, &port_be, 2);
     return out;
 }
@@ -49,11 +51,9 @@ RoutingEntry RoutingEntry::from_compact(const std::string& data, size_t offset)
     {
     };
     addr.s_addr = ip_raw;
-    entry.ip = inet_ntoa(addr);
-
     uint16_t port_be{};
     std::memcpy(&port_be, data.data() + offset + 24, 2);
-    entry.port = ntohs(port_be);
+    entry.pa = PeerAddress(inet_ntoa(addr), ntohs(port_be));
 
     entry.last_seen = std::chrono::steady_clock::now();
     return entry;
@@ -137,7 +137,7 @@ void RoutingTable::add(const RoutingEntry& entry)
     if (bucket >= NUM_BUCKETS)
     {
         log_error("routing add: no bucket for node " + entry.id.hex() + " (" +
-                  entry.ip + ":" + std::to_string(entry.port) + ")");
+                  entry.pa.to_string() + ")");
         return;
     }
 

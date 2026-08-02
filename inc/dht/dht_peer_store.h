@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "lru_cache.h"
+#include "peer_address.h"
 
 namespace dht
 {
@@ -27,10 +28,10 @@ class DhtPeerStore
     // Record or refresh a compact peer (6-byte ip:port) for info_hash;
     // creates the bucket if needed, evicts LRU info-hash at global cap,
     // and evicts the LRU peer when the per-hash cache is full.
-    void upsert(const std::string& info_hash, const std::string& compact);
+    void upsert(const std::string& info_hash, PeerAddress pa);
 
     // Non-expired compact peer strings for info_hash; refreshes bucket LRU.
-    std::vector<std::string> live_peers(const std::string& info_hash);
+    std::vector<PeerAddress> live_peers(const std::string& info_hash);
 
     // Create or touch a bucket (used when starting a get_peers lookup).
     void ensure_bucket(const std::string& info_hash);
@@ -48,9 +49,9 @@ class DhtPeerStore
     {
         HashBucket() : peers(MAX_PEERS_PER_HASH) {}
 
-        // compact peer (ip:port) -> last-seen time, LRU-evicted once the
+        // Peer Addres -> last-seen time, LRU-evicted once the
         // bucket holds MAX_PEERS_PER_HASH peers.
-        utils::LruCache<std::string, std::chrono::steady_clock::time_point>
+        utils::LruCache<PeerAddress, std::chrono::steady_clock::time_point>
             peers;
     };
 

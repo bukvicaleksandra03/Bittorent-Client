@@ -2,13 +2,13 @@
 
 #include <array>
 #include <chrono>
-#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "dht/node_id.h"
 #include "logger.h"
+#include "peer_address.h"
 
 namespace dht
 {
@@ -17,9 +17,7 @@ namespace dht
 struct RoutingEntry
 {
     NodeId id;
-    std::string ip;  // dotted-decimal IPv4
-    uint16_t port{0};
-
+    PeerAddress pa;
     std::chrono::steady_clock::time_point last_seen{};
 
     // Is this entry still "good" (heard from within the last 15 minutes)?

@@ -1,5 +1,7 @@
 #include "dht/dht_peer_store.h"
 
+#include "peer_address.h"
+
 namespace dht
 {
 
@@ -34,8 +36,7 @@ void DhtPeerStore::ensure_bucket(const std::string& info_hash)
     buckets_.put(info_hash, HashBucket{});
 }
 
-void DhtPeerStore::upsert(const std::string& info_hash,
-                          const std::string& compact)
+void DhtPeerStore::upsert(const std::string& info_hash, PeerAddress pa)
 {
     std::lock_guard<std::mutex> lk(mutex_);
     const auto now = std::chrono::steady_clock::now();
@@ -47,23 +48,23 @@ void DhtPeerStore::upsert(const std::string& info_hash,
     // Records a new peer, or refreshes an existing one, promoting it to
     // most-recently-used and evicting the LRU peer once the bucket already
     // holds MAX_PEERS_PER_HASH entries.
-    bucket->peers.put(compact, now);
+    bucket->peers.put(pa, now);
 }
 
-std::vector<std::string> DhtPeerStore::live_peers(const std::string& info_hash)
+std::vector<PeerAddress> DhtPeerStore::live_peers(const std::string& info_hash)
 {
     std::lock_guard<std::mutex> lk(mutex_);
-    std::vector<std::string> result;
+    std::vector<PeerAddress> result;
     HashBucket* bucket = buckets_.get(info_hash);
     if (bucket == nullptr)
         return result;
 
     const auto now = std::chrono::steady_clock::now();
     result.reserve(bucket->peers.size());
-    for (const auto& [compact, last_seen] : bucket->peers)
+    for (const auto& [pa, last_seen] : bucket->peers)
     {
         if (now - last_seen < PEER_ENTRY_TTL)
-            result.push_back(compact);
+            result.push_back(pa);
     }
     return result;
 }

@@ -106,12 +106,12 @@ std::string make_nodes_response(const std::string& txn,
 std::string make_peers_response(const std::string& txn,
                                 const NodeId& self_id,
                                 const std::string& token,
-                                const std::vector<std::string>& compact_peers)
+                                const std::vector<PeerAddress>& pas)
 {
     std::vector<std::string> encoded;
-    encoded.reserve(compact_peers.size());
-    for (const auto& p : compact_peers)
-        encoded.push_back(bencode::string(p));
+    encoded.reserve(pas.size());
+    for (const auto& p : pas)
+        encoded.push_back(bencode::string(p.to_string()));
 
     std::string r = bencode::dict({{"id", bencode::string(self_id.to_string())},
                                    {"token", bencode::string(token)},
@@ -392,8 +392,7 @@ std::string format_nodes(const std::vector<RoutingEntry>& nodes,
             oss << ", ";
         oss << "id=" << format_node_id_prefix(nodes[i].id) << " @ "
             << nodes[i].ip << ':' << nodes[i].port;
-        const size_t repeat =
-            (i < counts.size()) ? counts[i] : 1;
+        const size_t repeat = (i < counts.size()) ? counts[i] : 1;
         if (repeat > 1)
             oss << " x" << repeat;
     }
@@ -474,8 +473,8 @@ std::string format_krpc_summary(const KrpcMessage& msg)
                 {
                     wire_count = msg.nodes.size();
                 }
-                oss << "\n    nodes(" << wire_count << ")="
-                    << format_nodes(msg.nodes, msg.node_counts);
+                oss << "\n    nodes(" << wire_count
+                    << ")=" << format_nodes(msg.nodes, msg.node_counts);
             }
             if (!msg.peers.empty())
             {

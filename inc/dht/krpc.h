@@ -7,6 +7,7 @@
 
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
+#include "peer_address.h"
 
 namespace dht
 {
@@ -52,7 +53,7 @@ std::string make_nodes_response(const std::string& txn,
 std::string make_peers_response(const std::string& txn,
                                 const NodeId& self_id,
                                 const std::string& token,
-                                const std::vector<std::string>& compact_peers);
+                                const std::vector<PeerAddress>& compact_peers);
 
 std::string make_nodes_response_gp(const std::string& txn,
                                    const NodeId& self_id,
@@ -98,9 +99,10 @@ struct KrpcMessage
     bool implied_port{false};  // announce_peer
 
     // Response fields
-    std::vector<RoutingEntry> nodes;       // unique compact nodes (nodes / find_node)
-    std::vector<size_t> node_counts;       // wire repeat count per nodes[i]
-    std::vector<std::string> peers;        // compact peer list (get_peers)
+    std::vector<RoutingEntry>
+        nodes;  // unique compact nodes (nodes / find_node)
+    std::vector<size_t> node_counts;  // wire repeat count per nodes[i]
+    std::vector<std::string> peers;   // compact peer list (get_peers)
 
     // Error fields
     int error_code{0};
