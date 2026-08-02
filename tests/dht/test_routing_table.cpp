@@ -61,8 +61,8 @@ TEST(RoutingTable, MaxSize)
         dht::NodeId id = dht::NodeId::random();
         rt.add({id, "127.0.0.1", static_cast<uint16_t>(7000 + i)});
     }
-    // Table should not grow unboundedly; default max_size is 1000
-    EXPECT_LE(rt.size(), 1000u);
+    // Table should not grow unboundedly (NUM_BUCKETS * K = 1280)
+    EXPECT_LE(rt.size(), dht::RoutingTable::NUM_BUCKETS * dht::RoutingTable::K);
 }
 
 TEST(RoutingTable, GetAllNodes)

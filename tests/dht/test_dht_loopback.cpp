@@ -139,6 +139,7 @@ TEST(DhtClient, GetPeersRoutesByTransactionId)
         server_port, info_hash, "127.0.0.1", peer_port));
 
     dht::DhtClient lookup_client(0);
+    lookup_client.set_bootstrap_on_start(false);
     lookup_client.start();
     ASSERT_TRUE(lookup_client.is_running());
 
@@ -202,6 +203,7 @@ TEST(DhtClient, GetPeersSeparatesMultipleInfoHashes)
         server_port, hash_b, "127.0.0.1", peer_port_b));
 
     dht::DhtClient lookup_client(0);
+    lookup_client.set_bootstrap_on_start(false);
     lookup_client.start();
     lookup_client.ping("127.0.0.1", server_port);
     ASSERT_TRUE(wait_for_routing_table(

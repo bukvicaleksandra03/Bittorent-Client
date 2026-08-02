@@ -58,7 +58,7 @@ fs::path project_root()
 std::string default_torrent_path()
 {
     return (project_root() / "torrent_files" / "unparsed_torrents" /
-            "annakarenina_mas_1202_librivox_archive.torrent")
+            "linuxmint-22.2-cinnamon-64bit.iso.torrent")
         .string();
 }
 
@@ -121,17 +121,17 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
 
     dht::DhtClient client(0);
     {
-        auto krpc_logger = std::make_shared<logger::Logger>();
-        krpc_logger->set_level(logger::Level::INFO);
-        krpc_logger->set_prefix(" KRPC ");
+        auto dht_logger = std::make_shared<logger::Logger>();
+        dht_logger->set_level(logger::Level::INFO);
+        dht_logger->set_prefix(" KRPC ");
         const fs::path log_dir = project_root() / "logs";
         fs::create_directories(log_dir);
         if (fs::exists(log_dir / "dht.log"))
         {
             fs::remove(log_dir / "dht.log");
         }
-        krpc_logger->set_file((log_dir / "dht.log").string());
-        client.add_krpc_logger(krpc_logger);
+        dht_logger->set_file((log_dir / "dht.log").string());
+        client.set_dht_logger(dht_logger);
     }
 
     client.set_peer_callback(

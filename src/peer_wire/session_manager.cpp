@@ -116,7 +116,7 @@ void SessionManager::start_all()
             m_dht_logger->set_level(level);
             m_dht_logger->set_prefix("KRPC ");
             m_dht_logger->set_file(dht_log_path.string());
-            m_dht_client->add_krpc_logger(m_dht_logger);
+            m_dht_client->set_dht_logger(m_dht_logger);
         }
 
         m_dht_client->start();
@@ -124,14 +124,15 @@ void SessionManager::start_all()
                   << " (node id: " << m_dht_client->self_id().hex() << ")\n";
     }
 
-    // Kick off get_peers lookups for every torrent we already know about.
+    // Register active torrents for periodic DHT get_peers + announce_peer.
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         for (auto& s : m_sessions)
         {
             if (s)
             {
-                m_dht_client->get_peers(s->info_hash_str());
+                m_dht_client->register_torrent(s->info_hash_str(),
+                                               m_listen_port);
                 s->start();
             }
         }

@@ -5,7 +5,6 @@
 #include <iomanip>
 #include <random>
 #include <sstream>
-#include <stdexcept>
 
 #include "dht/krpc.h"
 #include "net/socket.h"
@@ -36,6 +35,10 @@ static constexpr auto MAINT_INTERVAL = std::chrono::seconds(60);
 
 // How long a get_peers transaction id stays bound to an info hash.
 static constexpr auto PENDING_LOOKUP_TTL = std::chrono::minutes(2);
+
+// Re-run get_peers (and announce on token) for registered torrents.  Must stay
+// below PEER_ENTRY_TTL (30 min) in dht_peer_store.h.
+static constexpr auto ANNOUNCE_REFRESH_INTERVAL = std::chrono::minutes(12);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -107,7 +110,13 @@ void DhtClient::start()
 
     log_dht_info("listening on 0.0.0.0:" + std::to_string(port_) +
                  " node_id=" + self_id_.hex().substr(0, 8) + "...");
-    bootstrap();
+    if (bootstrap_on_start_)
+        bootstrap();
+}
+
+void DhtClient::set_bootstrap_on_start(bool enabled)
+{
+    bootstrap_on_start_ = enabled;
 }
 
 void DhtClient::set_peer_callback(PeerCallback cb)
@@ -149,6 +158,11 @@ void DhtClient::stop()
     if (maint_thread_.joinable())
         maint_thread_.join();
 
+    {
+        std::lock_guard<std::mutex> lk(registered_mutex_);
+        registered_torrents_.clear();
+    }
+
     socket_.reset();
 }
 
@@ -162,18 +176,14 @@ size_t DhtClient::routing_table_size() const
     return routing_table_.size();
 }
 
-void DhtClient::add_krpc_logger(std::shared_ptr<logger::Logger> logger)
+void DhtClient::set_dht_logger(std::shared_ptr<logger::Logger> logger)
 {
-    if (!logger)
-        return;
-
-    std::lock_guard<std::mutex> lk(krpc_loggers_mutex_);
-    for (const auto& existing : krpc_loggers_)
+    std::lock_guard<std::mutex> lk(dht_logger_mutex_);
+    dht_logger_ = std::move(logger);
     {
-        if (existing == logger)
-            return;
+        std::lock_guard<std::mutex> tl(table_mutex_);
+        routing_table_.set_dht_logger(dht_logger_);
     }
-    krpc_loggers_.push_back(std::move(logger));
 }
 
 void DhtClient::log_krpc(const char* direction,
@@ -190,12 +200,9 @@ void DhtClient::log_krpc(const char* direction,
         line << direction << ' ' << ip << ':' << port << " (unparsed, "
              << msg.size() << " bytes)";
 
-        std::lock_guard<std::mutex> lk(krpc_loggers_mutex_);
-        for (const auto& logger : krpc_loggers_)
-        {
-            if (logger)
-                logger->info(line.str());
-        }
+        std::lock_guard<std::mutex> lk(dht_logger_mutex_);
+        if (dht_logger_)
+            dht_logger_->info(line.str());
     }
 }
 
@@ -208,22 +215,40 @@ void DhtClient::log_krpc(const char* direction,
     line << direction << ' ' << ip << ':' << port << ' '
          << format_krpc_summary(msg);
 
-    std::lock_guard<std::mutex> lk(krpc_loggers_mutex_);
-    for (const auto& logger : krpc_loggers_)
-    {
-        if (logger)
-            logger->info(line.str());
-    }
+    std::lock_guard<std::mutex> lk(dht_logger_mutex_);
+    if (dht_logger_)
+        dht_logger_->info(line.str());
 }
 
 void DhtClient::log_dht_info(const std::string& message) const
 {
-    std::lock_guard<std::mutex> lk(krpc_loggers_mutex_);
-    for (const auto& logger : krpc_loggers_)
+    std::lock_guard<std::mutex> lk(dht_logger_mutex_);
+    if (dht_logger_)
+        dht_logger_->info("[DHT] " + message);
+}
+
+void DhtClient::register_torrent(const std::string& info_hash_20, uint16_t port)
+{
+    if (info_hash_20.size() != 20)
+        return;
+
     {
-        if (logger)
-            logger->info("[DHT] " + message);
+        std::lock_guard<std::mutex> lk(registered_mutex_);
+        registered_torrents_[info_hash_20] =
+            RegisteredTorrent{port, std::chrono::steady_clock::now()};
     }
+
+    if (running_.load())
+        get_peers(info_hash_20);
+}
+
+void DhtClient::unregister_torrent(const std::string& info_hash_20)
+{
+    if (info_hash_20.size() != 20)
+        return;
+
+    std::lock_guard<std::mutex> lk(registered_mutex_);
+    registered_torrents_.erase(info_hash_20);
 }
 
 void DhtClient::get_peers(const std::string& info_hash_20)
@@ -234,25 +259,51 @@ void DhtClient::get_peers(const std::string& info_hash_20)
     std::vector<RoutingEntry> closest;
     {
         std::lock_guard<std::mutex> lk(table_mutex_);
-        closest = routing_table_.closest(NodeId::from_string(info_hash_20), 8);
+        closest =
+            routing_table_.closest(NodeId::from_string(info_hash_20), RoutingTable::K);
     }
 
     if (closest.empty())
         return;
 
-    std::string txn = random_txn();
+    peer_store_.ensure_bucket(info_hash_20);
+
+    std::vector<OutboundKrpc> outbound;
     {
         std::lock_guard<std::mutex> lk(peers_mutex_);
         expire_pending_lookups();
-        pending_lookups_[txn] = {info_hash_20,
-                                 std::chrono::steady_clock::now()};
+        expire_active_lookups();
+
+        auto it = active_lookups_.find(info_hash_20);
+        if (it != active_lookups_.end())
+        {
+            if (!it->second.pending_txns.empty())
+                return;
+
+            if (all_closest_queried(it->second))
+            {
+                active_lookups_.erase(it);
+            }
+            else
+            {
+                outbound = advance_lookup(info_hash_20);
+            }
+        }
+
+        if (outbound.empty() && active_lookups_.count(info_hash_20) == 0)
+        {
+            LookupState state;
+            state.info_hash_20 = info_hash_20;
+            state.target = NodeId::from_string(info_hash_20);
+            state.candidates = std::move(closest);
+            state.started = std::chrono::steady_clock::now();
+            active_lookups_[info_hash_20] = std::move(state);
+            outbound = advance_lookup(info_hash_20);
+        }
     }
-    peer_store_.ensure_bucket(info_hash_20);
 
-    std::string msg = make_get_peers(txn, self_id_, info_hash_20);
-
-    for (const auto& node : closest)
-        send_krpc(msg, node.ip, node.port);
+    for (const auto& o : outbound)
+        send_krpc(o.msg, o.ip, o.port);
 }
 
 void DhtClient::ping(const std::string& ip, uint16_t port)
@@ -477,7 +528,8 @@ void DhtClient::on_announce_peer(const KrpcMessage& msg,
     peer_store_.upsert(msg.info_hash, compact);
 
     // Fire the callback so the torrent layer learns about this peer.
-    invoke_peer_callback(info_hash_bytes_to_hex(msg.info_hash), src_ip, peer_port);
+    invoke_peer_callback(
+        info_hash_bytes_to_hex(msg.info_hash), src_ip, peer_port);
 
     send_krpc(make_response(msg.txn, self_id_), src_ip, src_port);
 }
@@ -500,38 +552,51 @@ void DhtClient::on_response(const KrpcMessage& msg,
     // Store any token for future announce_peer.
     if (!msg.token.empty())
     {
-        std::string key = src_ip + ":" + std::to_string(src_port);
+        std::string key = addr_key(src_ip, src_port);
         std::lock_guard<std::mutex> lk(peers_mutex_);
         received_tokens_[key] = msg.token;
     }
 
-    if (msg.peers.empty())
-        return;
+    maybe_announce_registered(msg, src_ip, src_port);
 
     std::string info_hash_20;
+    std::vector<OutboundKrpc> outbound;
     {
         std::lock_guard<std::mutex> lk(peers_mutex_);
-        auto it = pending_lookups_.find(msg.txn);
-        if (it == pending_lookups_.end())
+        auto pit = pending_lookups_.find(msg.txn);
+        if (pit == pending_lookups_.end())
             return;
-        info_hash_20 = it->second.first;
-    }
 
-    const std::string info_hash_hex = info_hash_bytes_to_hex(info_hash_20);
+        info_hash_20 = pit->second.first;
 
-    for (const auto& compact : msg.peers)
-    {
-        std::string peer_ip;
-        uint16_t peer_port = 0;
-        if (!compact_to_peer(compact, 0, peer_ip, peer_port))
-            continue;
-
+        if (active_lookups_.count(info_hash_20))
         {
-            peer_store_.upsert(info_hash_20, compact);
+            on_lookup_response(msg, info_hash_20);
+            if (active_lookups_.count(info_hash_20))
+                outbound = advance_lookup(info_hash_20);
         }
 
-        invoke_peer_callback(info_hash_hex, peer_ip, peer_port);
+        pending_lookups_.erase(pit);
     }
+
+    if (!info_hash_20.empty() && !msg.peers.empty())
+    {
+        const std::string info_hash_hex = info_hash_bytes_to_hex(info_hash_20);
+
+        for (const auto& compact : msg.peers)
+        {
+            std::string peer_ip;
+            uint16_t peer_port = 0;
+            if (!compact_to_peer(compact, 0, peer_ip, peer_port))
+                continue;
+
+            peer_store_.upsert(info_hash_20, compact);
+            invoke_peer_callback(info_hash_hex, peer_ip, peer_port);
+        }
+    }
+
+    for (const auto& o : outbound)
+        send_krpc(o.msg, o.ip, o.port);
 }
 
 // ---------------------------------------------------------------------------
@@ -605,11 +670,13 @@ void DhtClient::maintenance_loop()
         {
             std::lock_guard<std::mutex> peers_lk(peers_mutex_);
             expire_pending_lookups();
+            expire_active_lookups();
         }
         peer_store_.expire_stale();
         refresh_buckets();
+        maintain_registered_torrents();
 
-        if (routing_table_size() == 0)
+        if (bootstrap_on_start_ && routing_table_size() == 0)
         {
             const auto now = std::chrono::steady_clock::now();
             if (now - last_bootstrap_attempt_ >= BOOTSTRAP_RETRY_INTERVAL)
@@ -639,29 +706,271 @@ void DhtClient::expire_pending_lookups()
     for (auto it = pending_lookups_.begin(); it != pending_lookups_.end();)
     {
         if (now - it->second.second >= PENDING_LOOKUP_TTL)
+        {
+            const std::string& txn = it->first;
+            const std::string& hash = it->second.first;
+            auto ait = active_lookups_.find(hash);
+            if (ait != active_lookups_.end())
+                ait->second.pending_txns.erase(txn);
             it = pending_lookups_.erase(it);
+        }
         else
+        {
             ++it;
+        }
     }
+}
+
+void DhtClient::expire_active_lookups()
+{
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = active_lookups_.begin(); it != active_lookups_.end();)
+    {
+        if (now - it->second.started >= PENDING_LOOKUP_TTL)
+        {
+            for (const auto& txn : it->second.pending_txns)
+                pending_lookups_.erase(txn);
+            it = active_lookups_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
+std::string DhtClient::addr_key(const std::string& ip, uint16_t port)
+{
+    return ip + ":" + std::to_string(port);
+}
+
+void DhtClient::merge_nodes_into_lookup(LookupState& state,
+                                        const std::vector<RoutingEntry>& nodes)
+{
+    for (const auto& n : nodes)
+    {
+        if (n.id == self_id_)
+            continue;
+        state.candidates.push_back(n);
+    }
+
+    std::sort(state.candidates.begin(),
+              state.candidates.end(),
+              [&state](const RoutingEntry& a, const RoutingEntry& b)
+              { return (state.target ^ a.id) < (state.target ^ b.id); });
+
+    if (state.candidates.size() > RoutingTable::K)
+        state.candidates.resize(RoutingTable::K);
+}
+
+bool DhtClient::all_closest_queried(const LookupState& state) const
+{
+    for (const auto& node : state.candidates)
+    {
+        if (state.queried.find(addr_key(node.ip, node.port)) == state.queried.end())
+            return false;
+    }
+    return true;
+}
+
+void DhtClient::finish_lookup(const std::string& info_hash_20)
+{
+    auto it = active_lookups_.find(info_hash_20);
+    if (it == active_lookups_.end())
+        return;
+
+    for (const auto& txn : it->second.pending_txns)
+        pending_lookups_.erase(txn);
+    active_lookups_.erase(it);
+}
+
+std::vector<DhtClient::OutboundKrpc> DhtClient::advance_lookup(
+    const std::string& info_hash_20)
+{
+    std::vector<OutboundKrpc> outbound;
+
+    auto it = active_lookups_.find(info_hash_20);
+    if (it == active_lookups_.end())
+        return outbound;
+
+    LookupState& state = it->second;
+
+    if (all_closest_queried(state) && state.pending_txns.empty())
+    {
+        active_lookups_.erase(it);
+        return outbound;
+    }
+
+    const size_t in_flight = state.pending_txns.size();
+    if (in_flight >= LOOKUP_ALPHA)
+        return outbound;
+
+    size_t can_send = LOOKUP_ALPHA - in_flight;
+    for (const auto& node : state.candidates)
+    {
+        if (can_send == 0)
+            break;
+
+        const std::string key = addr_key(node.ip, node.port);
+        if (state.queried.count(key))
+            continue;
+
+        state.queried.insert(key);
+        const std::string txn = random_txn();
+        state.pending_txns.insert(txn);
+        pending_lookups_[txn] = {info_hash_20, std::chrono::steady_clock::now()};
+
+        outbound.push_back(
+            {make_get_peers(txn, self_id_, info_hash_20), node.ip, node.port});
+        --can_send;
+    }
+
+    if (outbound.empty() && state.pending_txns.empty() && all_closest_queried(state))
+        active_lookups_.erase(info_hash_20);
+
+    return outbound;
+}
+
+void DhtClient::on_lookup_response(const KrpcMessage& msg,
+                                   const std::string& info_hash_20)
+{
+    auto it = active_lookups_.find(info_hash_20);
+    if (it == active_lookups_.end())
+        return;
+
+    LookupState& state = it->second;
+    state.pending_txns.erase(msg.txn);
+    merge_nodes_into_lookup(state, msg.nodes);
+
+    if (!msg.peers.empty())
+    {
+        finish_lookup(info_hash_20);
+        return;
+    }
+
+    if (all_closest_queried(state) && state.pending_txns.empty())
+        finish_lookup(info_hash_20);
+}
+
+void DhtClient::maintain_registered_torrents()
+{
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<std::string> to_refresh;
+
+    {
+        std::lock_guard<std::mutex> reg_lk(registered_mutex_);
+        for (const auto& [hash, reg] : registered_torrents_)
+        {
+            if (now - reg.last_refresh >= ANNOUNCE_REFRESH_INTERVAL)
+                to_refresh.push_back(hash);
+        }
+    }
+
+    for (const auto& hash : to_refresh)
+    {
+        bool pending = false;
+        {
+            std::lock_guard<std::mutex> lk(peers_mutex_);
+            auto ait = active_lookups_.find(hash);
+            if (ait != active_lookups_.end() && !ait->second.pending_txns.empty())
+                pending = true;
+
+            if (!pending)
+            {
+                for (const auto& [txn, binding] : pending_lookups_)
+                {
+                    (void)txn;
+                    if (binding.first == hash)
+                    {
+                        pending = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (pending)
+            continue;
+
+        get_peers(hash);
+
+        std::lock_guard<std::mutex> reg_lk(registered_mutex_);
+        auto it = registered_torrents_.find(hash);
+        if (it != registered_torrents_.end())
+            it->second.last_refresh = now;
+    }
+}
+
+void DhtClient::maybe_announce_registered(const KrpcMessage& msg,
+                                          const std::string& src_ip,
+                                          uint16_t src_port)
+{
+    if (msg.token.empty())
+        return;
+
+    std::string info_hash_20;
+    {
+        std::lock_guard<std::mutex> lk(peers_mutex_);
+        auto it = pending_lookups_.find(msg.txn);
+        if (it == pending_lookups_.end())
+            return;
+        info_hash_20 = it->second.first;
+    }
+
+    uint16_t listen_port = 0;
+    {
+        std::lock_guard<std::mutex> lk(registered_mutex_);
+        auto it = registered_torrents_.find(info_hash_20);
+        if (it == registered_torrents_.end())
+            return;
+        listen_port = it->second.listen_port;
+    }
+
+    announce_to_node(info_hash_20, listen_port, src_ip, src_port, msg.token);
+}
+
+void DhtClient::announce_to_node(const std::string& info_hash_20,
+                                 uint16_t listen_port,
+                                 const std::string& ip,
+                                 uint16_t node_port,
+                                 const std::string& token)
+{
+    if (info_hash_20.size() != 20 || ip.empty() || token.empty())
+        return;
+
+    std::string txn = random_txn();
+    send_krpc(make_announce_peer(
+                  txn, self_id_, info_hash_20, listen_port, token, true),
+              ip,
+              node_port);
 }
 
 void DhtClient::refresh_buckets()
 {
-    // Re-ping each node in the routing table to verify it's still alive.
-    std::vector<RoutingEntry> nodes;
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<size_t> buckets;
     {
         std::lock_guard<std::mutex> lk(table_mutex_);
-        nodes = routing_table_.all();
+        buckets = routing_table_.buckets_needing_refresh(now, std::chrono::minutes(15));
     }
 
-    for (const auto& node : nodes)
+    for (size_t b : buckets)
     {
-        // Only re-ping nodes that haven't been heard from recently.
-        auto age = std::chrono::steady_clock::now() - node.last_seen;
-        if (age > std::chrono::minutes(10))
+        NodeId target;
+        std::vector<RoutingEntry> closest;
         {
-            std::string txn = random_txn();
-            send_krpc(make_ping(txn, self_id_), node.ip, node.port);
+            std::lock_guard<std::mutex> lk(table_mutex_);
+            target = routing_table_.random_id_in_bucket(b);
+            closest = routing_table_.closest(target, RoutingTable::K);
+        }
+
+        size_t sent = 0;
+        for (const auto& node : closest)
+        {
+            if (sent >= 3)
+                break;
+            const std::string txn = random_txn();
+            send_krpc(make_find_node(txn, self_id_, target), node.ip, node.port);
+            ++sent;
         }
     }
 }

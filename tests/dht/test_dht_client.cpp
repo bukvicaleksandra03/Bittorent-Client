@@ -46,6 +46,21 @@ TEST(DhtClient, RoutingTableInitiallyEmpty)
     EXPECT_EQ(client.routing_table_size(), 0u);
 }
 
+TEST(DhtClient, RegisterUnregisterTorrent)
+{
+    dht::DhtClient client(0);
+    std::string info_hash(20, '\xAB');
+
+    EXPECT_NO_THROW(client.register_torrent(info_hash, 6881));
+    EXPECT_NO_THROW(client.register_torrent("", 6881));
+    EXPECT_NO_THROW(client.unregister_torrent(info_hash));
+
+    client.start();
+    EXPECT_NO_THROW(client.register_torrent(info_hash, 6881));
+    EXPECT_NO_THROW(client.unregister_torrent(info_hash));
+    client.stop();
+}
+
 TEST(DhtClient, PeerCallbackSet)
 {
     // Just verify we can set a callback without crashing.

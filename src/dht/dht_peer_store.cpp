@@ -1,7 +1,5 @@
 #include "dht/dht_peer_store.h"
 
-#include <algorithm>
-
 namespace dht
 {
 
@@ -11,51 +9,29 @@ void DhtPeerStore::expire_stale()
     const auto now = std::chrono::steady_clock::now();
     for (auto map_it = buckets_.begin(); map_it != buckets_.end();)
     {
-        auto& peers = map_it->second.peers;
-        peers.erase(
-            std::remove_if(peers.begin(),
-                           peers.end(),
-                           [&](const PeerEntry& e)
-                           { return now - e.last_seen >= PEER_ENTRY_TTL; }),
-            peers.end());
+        const auto& peers = map_it->second.peers;
 
-        if (peers.empty())
+        // The front entry (peers.begin()) is always the most recently
+        // seen peer in the bucket. If even that one is past TTL, every other
+        // entry (all with an earlier last-seen time) is too, so the whole
+        // hash is dead.
+        const bool bucket_is_dead =
+            peers.empty() || now - peers.begin()->second >= PEER_ENTRY_TTL;
+
+        if (bucket_is_dead)
             map_it = buckets_.erase(map_it);
         else
             ++map_it;
     }
 }
 
-void DhtPeerStore::evict_lru_if_at_capacity()
-{
-    if (buckets_.size() < MAX_INFO_HASHES)
-        return;
-
-    auto lru = buckets_.end();
-    for (auto it = buckets_.begin(); it != buckets_.end(); ++it)
-    {
-        if (lru == buckets_.end() ||
-            it->second.last_seen < lru->second.last_seen)
-            lru = it;
-    }
-
-    if (lru != buckets_.end())
-        buckets_.erase(lru);
-}
-
 void DhtPeerStore::ensure_bucket(const std::string& info_hash)
 {
     std::lock_guard<std::mutex> lk(mutex_);
-    const auto now = std::chrono::steady_clock::now();
-    auto it = buckets_.find(info_hash);
-    if (it != buckets_.end())
-    {
-        it->second.last_seen = now;
+    if (buckets_.get(info_hash) != nullptr)
         return;
-    }
 
-    evict_lru_if_at_capacity();
-    buckets_.emplace(info_hash, HashBucket{{}, now});
+    buckets_.put(info_hash, HashBucket{});
 }
 
 void DhtPeerStore::upsert(const std::string& info_hash,
@@ -63,60 +39,31 @@ void DhtPeerStore::upsert(const std::string& info_hash,
 {
     std::lock_guard<std::mutex> lk(mutex_);
     const auto now = std::chrono::steady_clock::now();
-    auto it = buckets_.find(info_hash);
-    if (it == buckets_.end())
-    {
-        evict_lru_if_at_capacity();
-        it = buckets_.emplace(info_hash, HashBucket{{}, now}).first;
-    }
-    else
-    {
-        it->second.last_seen = now;
-    }
 
-    auto& peers = it->second.peers;
+    HashBucket* bucket = buckets_.get(info_hash);
+    if (bucket == nullptr)
+        bucket = &buckets_.put(info_hash, HashBucket{});
 
-    for (auto& entry : peers)
-    {
-        if (entry.compact == compact)
-        {
-            entry.last_seen = now;
-            return;
-        }
-    }
-
-    if (peers.size() >= MAX_PEERS_PER_HASH)
-    {
-        auto oldest = peers.begin();
-        for (auto peer_it = peers.begin() + 1; peer_it != peers.end();
-             ++peer_it)
-        {
-            if (peer_it->last_seen < oldest->last_seen)
-                oldest = peer_it;
-        }
-        *oldest = PeerEntry{compact, now};
-        return;
-    }
-
-    peers.push_back(PeerEntry{compact, now});
+    // Records a new peer, or refreshes an existing one, promoting it to
+    // most-recently-used and evicting the LRU peer once the bucket already
+    // holds MAX_PEERS_PER_HASH entries.
+    bucket->peers.put(compact, now);
 }
 
 std::vector<std::string> DhtPeerStore::live_peers(const std::string& info_hash)
 {
     std::lock_guard<std::mutex> lk(mutex_);
     std::vector<std::string> result;
-    const auto it = buckets_.find(info_hash);
-    if (it == buckets_.end())
+    HashBucket* bucket = buckets_.get(info_hash);
+    if (bucket == nullptr)
         return result;
 
     const auto now = std::chrono::steady_clock::now();
-    it->second.last_seen = now;
-
-    result.reserve(it->second.peers.size());
-    for (const auto& entry : it->second.peers)
+    result.reserve(bucket->peers.size());
+    for (const auto& [compact, last_seen] : bucket->peers)
     {
-        if (now - entry.last_seen < PEER_ENTRY_TTL)
-            result.push_back(entry.compact);
+        if (now - last_seen < PEER_ENTRY_TTL)
+            result.push_back(compact);
     }
     return result;
 }

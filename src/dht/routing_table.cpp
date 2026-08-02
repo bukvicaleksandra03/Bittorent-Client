@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <random>
 
 namespace dht
 {
@@ -23,15 +24,12 @@ bool RoutingEntry::is_good() const
 std::string RoutingEntry::compact() const
 {
     std::string out(26, '\0');
-    // 20-byte node ID
     std::memcpy(out.data(), id.bytes.data(), 20);
-    // 4-byte IPv4 address (network byte order)
     struct in_addr addr
     {
     };
     inet_aton(ip.c_str(), &addr);
     std::memcpy(out.data() + 20, &addr.s_addr, 4);
-    // 2-byte port (network byte order)
     uint16_t port_be = htons(port);
     std::memcpy(out.data() + 24, &port_be, 2);
     return out;
@@ -65,64 +63,156 @@ RoutingEntry RoutingEntry::from_compact(const std::string& data, size_t offset)
 // RoutingTable
 // ---------------------------------------------------------------------------
 
-RoutingTable::RoutingTable(const NodeId& self_id, size_t max_size)
-    : self_id_(self_id), max_size_(max_size)
+RoutingTable::RoutingTable(const NodeId& self_id) : self_id_(self_id)
 {
+    bucket_sizes_.fill(0);
+}
+
+void RoutingTable::set_dht_logger(std::shared_ptr<logger::Logger> logger)
+{
+    dht_logger_ = std::move(logger);
+}
+
+void RoutingTable::log_error(const std::string& message) const
+{
+    if (dht_logger_)
+        dht_logger_->error("[Routing Table] " + message);
+}
+
+size_t RoutingTable::bucket_index(const NodeId& id) const
+{
+    NodeId dist = self_id_ ^ id;
+    if (dist.is_zero())
+        return NUM_BUCKETS;
+
+    for (size_t byte_idx = 0; byte_idx < dist.bytes.size(); ++byte_idx)
+    {
+        uint8_t b = dist.bytes[byte_idx];
+        if (b == 0)
+            continue;
+        for (int bit = 7; bit >= 0; --bit)
+        {
+            if (b & (1u << bit))
+                return byte_idx * 8 + static_cast<size_t>(7 - bit);
+        }
+    }
+    return NUM_BUCKETS - 1;
+}
+
+RoutingEntry* RoutingTable::find_in_bucket(size_t bucket, const NodeId& id)
+{
+    if (bucket >= NUM_BUCKETS)
+        return nullptr;
+    for (size_t i = 0; i < bucket_sizes_[bucket]; ++i)
+    {
+        if (buckets_[bucket][i].id == id)
+            return &buckets_[bucket][i];
+    }
+    return nullptr;
+}
+
+void RoutingTable::touch_bucket_entry(size_t bucket,
+                                      size_t idx,
+                                      const RoutingEntry& entry)
+{
+    if (idx >= bucket_sizes_[bucket])
+        return;
+    buckets_[bucket][idx] = entry;
+    // Move to end (most recently seen).
+    if (idx + 1 < bucket_sizes_[bucket])
+    {
+        RoutingEntry updated = buckets_[bucket][idx];
+        for (size_t i = idx; i + 1 < bucket_sizes_[bucket]; ++i)
+            buckets_[bucket][i] = buckets_[bucket][i + 1];
+        buckets_[bucket][bucket_sizes_[bucket] - 1] = updated;
+    }
 }
 
 void RoutingTable::add(const RoutingEntry& entry)
 {
-    if (entry.id == self_id_)
+    if (entry.id == self_id_ || entry.id.is_zero())
         return;
 
-    // Update existing entry if present.
-    for (auto& n : entries_)
+    const size_t bucket = bucket_index(entry.id);
+    if (bucket >= NUM_BUCKETS)
     {
-        if (n.id == entry.id)
-        {
-            n = entry;
-            return;
-        }
-    }
-
-    if (entries_.size() < max_size_)
-    {
-        entries_.push_back(entry);
+        log_error("routing add: no bucket for node " + entry.id.hex() + " (" +
+                  entry.ip + ":" + std::to_string(entry.port) + ")");
         return;
     }
 
-    // Table is full: replace the furthest entry if the new one is closer.
-    NodeId new_dist = self_id_ ^ entry.id;
-    size_t worst_idx = 0;
-    NodeId worst_dist = self_id_ ^ entries_[0].id;
-
-    for (size_t i = 1; i < entries_.size(); ++i)
+    if (RoutingEntry* existing = find_in_bucket(bucket, entry.id))
     {
-        NodeId d = self_id_ ^ entries_[i].id;
-        if (worst_dist < d)
+        *existing = entry;
+        const size_t idx =
+            static_cast<size_t>(existing - buckets_[bucket].data());
+        touch_bucket_entry(bucket, idx, entry);
+        return;
+    }
+
+    if (bucket_sizes_[bucket] < K)
+    {
+        buckets_[bucket][bucket_sizes_[bucket]++] = entry;
+        return;
+    }
+
+    // Bucket full: replace the least-recently seen non-good entry, else drop.
+    size_t replace_idx = 0;
+    auto oldest = buckets_[bucket][0].last_seen;
+    for (size_t i = 1; i < bucket_sizes_[bucket]; ++i)
+    {
+        if (buckets_[bucket][i].last_seen < oldest)
         {
-            worst_dist = d;
-            worst_idx = i;
+            oldest = buckets_[bucket][i].last_seen;
+            replace_idx = i;
         }
     }
 
-    if (new_dist < worst_dist)
-        entries_[worst_idx] = entry;
+    if (!buckets_[bucket][replace_idx].is_good())
+        buckets_[bucket][replace_idx] = entry;
 }
 
 void RoutingTable::remove(const NodeId& id)
 {
-    entries_.erase(
-        std::remove_if(entries_.begin(),
-                       entries_.end(),
-                       [&id](const RoutingEntry& n) { return n.id == id; }),
-        entries_.end());
+    const size_t bucket = bucket_index(id);
+    if (bucket >= NUM_BUCKETS)
+        return;
+
+    for (size_t i = 0; i < bucket_sizes_[bucket]; ++i)
+    {
+        if (buckets_[bucket][i].id != id)
+            continue;
+        for (size_t j = i + 1; j < bucket_sizes_[bucket]; ++j)
+            buckets_[bucket][j - 1] = buckets_[bucket][j];
+        --bucket_sizes_[bucket];
+        return;
+    }
+}
+
+size_t RoutingTable::size() const
+{
+    size_t total = 0;
+    for (size_t n : bucket_sizes_)
+        total += n;
+    return total;
+}
+
+std::vector<RoutingEntry> RoutingTable::all() const
+{
+    std::vector<RoutingEntry> out;
+    out.reserve(size());
+    for (size_t b = 0; b < NUM_BUCKETS; ++b)
+    {
+        for (size_t i = 0; i < bucket_sizes_[b]; ++i)
+            out.push_back(buckets_[b][i]);
+    }
+    return out;
 }
 
 std::vector<RoutingEntry> RoutingTable::closest(const NodeId& target,
                                                 size_t k) const
 {
-    std::vector<RoutingEntry> sorted = entries_;
+    std::vector<RoutingEntry> sorted = all();
     std::sort(sorted.begin(),
               sorted.end(),
               [&target](const RoutingEntry& a, const RoutingEntry& b)
@@ -131,6 +221,68 @@ std::vector<RoutingEntry> RoutingTable::closest(const NodeId& target,
     if (sorted.size() > k)
         sorted.resize(k);
     return sorted;
+}
+
+// A stale bucket is refreshed by looking up a random ID inside it: the nodes
+// closest to that target are exactly the ones that belong in the bucket, so the
+// lookup yields fresh candidates for the quiet region of the keyspace. The
+// target is randomized so repeated refreshes probe different points in the
+// bucket instead of converging on the same few nodes.
+NodeId RoutingTable::random_id_in_bucket(size_t bucket) const
+{
+    NodeId id = self_id_;
+    if (bucket >= NUM_BUCKETS)
+        bucket = NUM_BUCKETS - 1;
+
+    static thread_local std::mt19937 gen(std::random_device{}());
+    static thread_local std::uniform_int_distribution<int> bit_dist(0, 1);
+
+    const size_t byte_idx = bucket / 8;
+    const int bit_in_byte = 7 - static_cast<int>(bucket % 8);
+
+    id.bytes[byte_idx] ^=
+        static_cast<uint8_t>(1u << static_cast<unsigned>(bit_in_byte));
+
+    for (size_t b = bucket + 1; b < NUM_BUCKETS; ++b)
+    {
+        const size_t bi = b / 8;
+        const int bb = 7 - static_cast<int>(b % 8);
+        if (bit_dist(gen))
+            id.bytes[bi] |=
+                static_cast<uint8_t>(1u << static_cast<unsigned>(bb));
+        else
+            id.bytes[bi] &= static_cast<uint8_t>(
+                ~static_cast<uint8_t>(1u << static_cast<unsigned>(bb)));
+    }
+
+    return id;
+}
+
+std::vector<size_t> RoutingTable::buckets_needing_refresh(
+    std::chrono::steady_clock::time_point now,
+    std::chrono::minutes max_age) const
+{
+    std::vector<size_t> out;
+    for (size_t b = 0; b < NUM_BUCKETS; ++b)
+    {
+        if (bucket_sizes_[b] == 0)
+        {
+            out.push_back(b);
+            continue;
+        }
+        bool stale = true;
+        for (size_t i = 0; i < bucket_sizes_[b]; ++i)
+        {
+            if (now - buckets_[b][i].last_seen < max_age)
+            {
+                stale = false;
+                break;
+            }
+        }
+        if (stale)
+            out.push_back(b);
+    }
+    return out;
 }
 
 }  // namespace dht
