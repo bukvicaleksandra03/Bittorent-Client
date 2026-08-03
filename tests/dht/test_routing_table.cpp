@@ -5,6 +5,7 @@
 
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
+#include "peer_address.h"
 
 #include <string>
 
@@ -18,7 +19,7 @@ TEST(RoutingTable, InsertAndFind)
     dht::RoutingTable rt(self);
 
     dht::NodeId nid = dht::NodeId::random();
-    dht::RoutingEntry entry{nid, "127.0.0.1", 6881};
+    dht::RoutingEntry entry{nid, PeerAddress("127.0.0.1", 6881)};
 
     rt.add(entry);
     EXPECT_GE(rt.size(), 1u);
@@ -38,7 +39,7 @@ TEST(RoutingTable, ClosestOrder)
     {
         dht::NodeId id{};
         id.bytes[19] = i;
-        rt.add({id, "127.0.0.1", static_cast<uint16_t>(6880 + i)});
+        rt.add({id, PeerAddress("127.0.0.1", static_cast<uint16_t>(6880 + i))});
     }
 
     dht::NodeId target{};
@@ -59,7 +60,7 @@ TEST(RoutingTable, MaxSize)
     for (int i = 0; i < 20; ++i)
     {
         dht::NodeId id = dht::NodeId::random();
-        rt.add({id, "127.0.0.1", static_cast<uint16_t>(7000 + i)});
+        rt.add({id, PeerAddress("127.0.0.1", static_cast<uint16_t>(7000 + i))});
     }
     // Table should not grow unboundedly (NUM_BUCKETS * K = 1280)
     EXPECT_LE(rt.size(), dht::RoutingTable::NUM_BUCKETS * dht::RoutingTable::K);
@@ -73,7 +74,7 @@ TEST(RoutingTable, GetAllNodes)
     for (int i = 0; i < 5; ++i)
     {
         dht::NodeId id = dht::NodeId::random();
-        rt.add({id, "10.0.0." + std::to_string(i + 1), 6881});
+        rt.add({id, PeerAddress("10.0.0." + std::to_string(i + 1), 6881)});
     }
 
     auto all = rt.all();

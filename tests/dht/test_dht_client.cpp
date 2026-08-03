@@ -67,9 +67,7 @@ TEST(DhtClient, PeerCallbackSet)
     dht::DhtClient client(0);
     bool called = false;
     client.set_peer_callback(
-        [&called](const std::string&, const std::string&, uint16_t) {
-            called = true;
-        });
+        [&called](const std::string&, PeerAddress) { called = true; });
     client.start();
     // Give bootstrap a very short window; we don't expect real peers in a unit
     // test, so `called` remains false — we only check no crash occurs.

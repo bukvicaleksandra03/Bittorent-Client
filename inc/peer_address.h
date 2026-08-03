@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -52,3 +53,15 @@ inline std::vector<PeerAddress> parse_compact_peers(const std::string& data)
 
     return peers;
 }
+
+namespace std
+{
+template <>
+struct hash<PeerAddress>
+{
+    size_t operator()(const PeerAddress& pa) const noexcept
+    {
+        return hash<string>{}(pa.ip) ^ (static_cast<size_t>(pa.port) << 1);
+    }
+};
+}  // namespace std

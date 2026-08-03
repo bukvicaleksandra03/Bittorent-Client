@@ -9,7 +9,7 @@
 //   RUN_DHT_PEER_DISCOVERY_TEST=1 ./out/test_dht_get_peers_from_torrent
 //     --gtest_filter='DhtPeerDiscovery.GetPeersFromRealTorrent'
 //
-// Long (keeps querying for the full lookup window):
+// Long (waits for the full lookup window):
 //   RUN_DHT_PEER_DISCOVERY_LONG_TEST=1 ./out/test_dht_get_peers_from_torrent
 //     --gtest_filter='DhtPeerDiscovery.GetPeersFromRealTorrentLong'
 //
@@ -25,13 +25,15 @@
 // Use torrent_files/unparsed_torrents/*.torrent (real bencode). Files under
 // torrent_files/torrent_file_objects/ are text metadata dumps, not .torrents.
 //
-// Peer counts vary by swarm size and DHT density. This client issues a single
-// get_peers round per loop iteration (no full iterative BEP-5 walk).
+// Peer counts vary by swarm size and DHT density. After start(), the client
+// runs iterative BEP-5 lookups asynchronously; register_torrent kicks off one
+// lookup and responses advance it without polling get_peers from the test.
 
 #include <gtest/gtest.h>
 
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -44,6 +46,7 @@
 #include "bencode/bencode_parser.h"
 #include "dht/dht_client.h"
 #include "logger.h"
+#include "peer_address.h"
 
 namespace fs = std::filesystem;
 
@@ -117,13 +120,13 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
                                       bool log_progress)
 {
     std::mutex peers_mutex;
+    std::condition_variable peers_cv;
     std::set<PeerEndpoint> peers;
 
     dht::DhtClient client(0);
     {
         auto dht_logger = std::make_shared<logger::Logger>();
         dht_logger->set_level(logger::Level::INFO);
-        dht_logger->set_prefix(" KRPC ");
         const fs::path log_dir = project_root() / "logs";
         fs::create_directories(log_dir);
         if (fs::exists(log_dir / "dht.log"))
@@ -134,13 +137,15 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
         client.set_dht_logger(dht_logger);
     }
 
+    const auto started = std::chrono::steady_clock::now();
+    size_t last_reported = 0;
+
     client.set_peer_callback(
-        [&](const std::string& /*info_hash_hex*/,
-            const std::string& ip,
-            uint16_t port)
+        [&](const std::string& /*info_hash_hex*/, PeerAddress pa)
         {
             std::lock_guard<std::mutex> lock(peers_mutex);
-            peers.insert(PeerEndpoint{ip, port});
+            if (peers.insert(PeerEndpoint{pa.ip, pa.port}).second)
+                peers_cv.notify_all();
         });
 
     client.start();
@@ -153,24 +158,17 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
         return {};
     }
 
-    const auto started = std::chrono::steady_clock::now();
+    client.register_torrent(info_hash, 6881);
+
     const auto deadline = started + lookup_timeout;
-    size_t last_reported = 0;
-
-    while (std::chrono::steady_clock::now() < deadline)
     {
-        client.get_peers(info_hash);
-
-        if (stop_on_first_peer)
+        std::unique_lock<std::mutex> lock(peers_mutex);
+        while (std::chrono::steady_clock::now() < deadline)
         {
-            std::lock_guard<std::mutex> lock(peers_mutex);
-            if (!peers.empty())
+            if (stop_on_first_peer && !peers.empty())
                 break;
-        }
-        else if (log_progress)
-        {
-            std::lock_guard<std::mutex> lock(peers_mutex);
-            if (peers.size() != last_reported)
+
+            if (log_progress && peers.size() != last_reported)
             {
                 const auto elapsed =
                     std::chrono::duration_cast<std::chrono::seconds>(
@@ -179,11 +177,15 @@ std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
                           << "s: " << peers.size() << " peer(s) so far\n";
                 last_reported = peers.size();
             }
-        }
 
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+            peers_cv.wait_until(
+                lock,
+                deadline,
+                [&] { return stop_on_first_peer && !peers.empty(); });
+        }
     }
 
+    client.unregister_torrent(info_hash);
     client.stop();
 
     std::lock_guard<std::mutex> lock(peers_mutex);

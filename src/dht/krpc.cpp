@@ -111,7 +111,7 @@ std::string make_peers_response(const std::string& txn,
     std::vector<std::string> encoded;
     encoded.reserve(pas.size());
     for (const auto& p : pas)
-        encoded.push_back(bencode::string(p.to_string()));
+        encoded.push_back(bencode::string(peer_to_compact(p.ip, p.port)));
 
     std::string r = bencode::dict({{"id", bencode::string(self_id.to_string())},
                                    {"token", bencode::string(token)},
@@ -305,7 +305,7 @@ std::optional<KrpcMessage> parse_krpc(const std::string& data)
                 parse_nodes(nodes_raw, msg.nodes, msg.node_counts);
 
             msg.token = bstring(r, "token");
-            msg.peers = parse_peers(blist(r, "values"));
+            msg.values = parse_peers(blist(r, "values"));
         }
         else if (y == "e")
         {
@@ -334,17 +334,19 @@ std::optional<KrpcMessage> parse_krpc(const std::string& data)
     }
 }
 
-namespace
+std::string bytes_to_hex(const std::string& bytes)
 {
-
-std::string txn_hex(const std::string& txn)
-{
+    if (bytes.empty())
+        return "";
     std::ostringstream oss;
     oss << std::hex << std::setfill('0');
-    for (unsigned char c : txn)
-        oss << std::setw(2) << static_cast<unsigned>(c);
+    for (unsigned char byte : bytes)
+        oss << std::setw(2) << static_cast<unsigned>(byte);
     return oss.str();
 }
+
+namespace
+{
 
 std::string bytes_hex_prefix(const std::string& bytes, size_t n = 8)
 {
@@ -359,17 +361,6 @@ std::string bytes_hex_prefix(const std::string& bytes, size_t n = 8)
     }
     if (bytes.size() > n)
         oss << "...";
-    return oss.str();
-}
-
-std::string bytes_hex(const std::string& bytes)
-{
-    if (bytes.empty())
-        return "";
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (unsigned char byte : bytes)
-        oss << std::setw(2) << static_cast<unsigned>(byte);
     return oss.str();
 }
 
@@ -391,7 +382,7 @@ std::string format_nodes(const std::vector<RoutingEntry>& nodes,
         if (i > 0)
             oss << ", ";
         oss << "id=" << format_node_id_prefix(nodes[i].id) << " @ "
-            << nodes[i].ip << ':' << nodes[i].port;
+            << nodes[i].pa.ip << ':' << nodes[i].pa.port;
         const size_t repeat = (i < counts.size()) ? counts[i] : 1;
         if (repeat > 1)
             oss << " x" << repeat;
@@ -426,7 +417,7 @@ std::pair<size_t, std::string> format_peers(
 std::string format_krpc_summary(const KrpcMessage& msg)
 {
     std::ostringstream oss;
-    oss << "transaction_id=" << txn_hex(msg.txn);
+    oss << "transaction_id=" << bytes_to_hex(msg.txn);
 
     switch (msg.type)
     {
@@ -476,13 +467,13 @@ std::string format_krpc_summary(const KrpcMessage& msg)
                 oss << "\n    nodes(" << wire_count
                     << ")=" << format_nodes(msg.nodes, msg.node_counts);
             }
-            if (!msg.peers.empty())
+            if (!msg.values.empty())
             {
-                const auto [peer_count, peer_list] = format_peers(msg.peers);
-                oss << "\n    peers(" << peer_count << ")=" << peer_list;
+                const auto [peer_count, peer_list] = format_peers(msg.values);
+                oss << "\n    values(" << peer_count << ")=" << peer_list;
             }
             if (!msg.token.empty())
-                oss << "\n    token=" << bytes_hex(msg.token);
+                oss << "\n    token=" << bytes_to_hex(msg.token);
             if (!msg.sender_id.is_zero())
                 oss << "\n    id=" << msg.sender_id.hex().substr(0, 8) << "...";
             break;

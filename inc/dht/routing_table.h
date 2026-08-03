@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -32,10 +33,37 @@ struct RoutingEntry
     // Returns an empty entry (zero ID) on failure.
     static RoutingEntry from_compact(const std::string& data,
                                      size_t offset = 0);
+
+    std::string to_string() const
+    {
+        return id_hex_short() + "(" + pa.to_string() + ")";
+    }
+
+    std::string to_string_detailed() const
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const auto age = now - last_seen;
+        const auto age_min =
+            std::chrono::duration_cast<std::chrono::minutes>(age).count();
+        std::string good = is_good() ? "TRUE" : "FALSE";
+        return id_hex_short() + "(" + pa.to_string() + ")" + " last seen " +
+               std::to_string(age_min) + " min ago. good= " + good;
+    }
+
+   private:
+    std::string id_hex_short() const
+    {
+        const std::string hex = id.hex();
+        if (hex.size() <= 8)
+            return hex;
+        return hex.substr(0, 8) + "...";
+    }
 };
 
 // Kademlia k-bucket routing table (BEP 5).
 // 160 buckets, k=8 nodes per bucket, indexed by XOR distance to self_id.
+// Thread-safe: all public methods lock internally, so callers do not need
+// their own mutex around a RoutingTable instance.
 class RoutingTable
 {
    public:
@@ -82,10 +110,18 @@ class RoutingTable
    private:
     using Bucket = std::array<RoutingEntry, K>;
 
+    // Guards dht_logger_, buckets_ and bucket_sizes_. Every public method
+    // that touches this state takes the lock once; private helpers assume
+    // it is already held by their caller (no re-entrant locking needed).
+    mutable std::mutex mutex_;
+
     NodeId self_id_;
     std::shared_ptr<logger::Logger> dht_logger_;
     std::array<Bucket, NUM_BUCKETS> buckets_{};
     std::array<size_t, NUM_BUCKETS> bucket_sizes_{};
+
+    // Same as all(), but assumes mutex_ is already held.
+    std::vector<RoutingEntry> all_unlocked() const;
 
     RoutingEntry* find_in_bucket(size_t bucket, const NodeId& id);
     void touch_bucket_entry(size_t bucket,
@@ -93,6 +129,9 @@ class RoutingTable
                             const RoutingEntry& entry);
 
     void log_error(const std::string& message) const;
+    void log_info(const std::string& message) const;
+    void log_debug(const std::string& message) const;
+    void log_bucket_content(size_t bucket, const std::string& label) const;
 };
 
 }  // namespace dht

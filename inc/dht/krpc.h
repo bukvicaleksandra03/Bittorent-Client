@@ -102,7 +102,7 @@ struct KrpcMessage
     std::vector<RoutingEntry>
         nodes;  // unique compact nodes (nodes / find_node)
     std::vector<size_t> node_counts;  // wire repeat count per nodes[i]
-    std::vector<std::string> peers;   // compact peer list (get_peers)
+    std::vector<std::string> values;  // compact peer list (get_peers "values")
 
     // Error fields
     int error_code{0};
@@ -115,6 +115,9 @@ std::optional<KrpcMessage> parse_krpc(const std::string& data);
 
 // Generate a 2-byte random transaction ID.
 std::string random_txn();
+
+// Hex-encode arbitrary bytes for logging (e.g. transaction ids, info hashes).
+std::string bytes_to_hex(const std::string& bytes);
 
 // One-line summary for DHT/KRPC logging (query type, txn, counts, etc.).
 std::string format_krpc_summary(const KrpcMessage& msg);

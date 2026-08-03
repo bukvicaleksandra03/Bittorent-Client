@@ -78,20 +78,13 @@ void SessionManager::start_all()
         // When the DHT finds peers for an info hash, inject them into the
         // matching TorrentManager (if we have one).
         m_dht_client->set_peer_callback(
-            [this](const std::string& info_hash_hex,
-                   const std::string& ip,
-                   uint16_t port)
+            [this](const std::string& info_hash_hex, PeerAddress pa)
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 for (auto& s : m_sessions)
                 {
                     if (s && s->info_hash_hex() == info_hash_hex)
-                    {
-                        PeerAddress p;
-                        p.ip = ip;
-                        p.port = port;
-                        s->add_dht_peer(p);
-                    }
+                        s->add_dht_peer(pa);
                 }
             });
 
@@ -114,7 +107,6 @@ void SessionManager::start_all()
 
             m_dht_logger = std::make_shared<logger::Logger>();
             m_dht_logger->set_level(level);
-            m_dht_logger->set_prefix("KRPC ");
             m_dht_logger->set_file(dht_log_path.string());
             m_dht_client->set_dht_logger(m_dht_logger);
         }

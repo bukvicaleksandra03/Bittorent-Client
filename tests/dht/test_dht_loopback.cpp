@@ -143,7 +143,7 @@ TEST(DhtClient, GetPeersRoutesByTransactionId)
     lookup_client.start();
     ASSERT_TRUE(lookup_client.is_running());
 
-    lookup_client.ping("127.0.0.1", server_port);
+    lookup_client.ping(PeerAddress("127.0.0.1", server_port));
     ASSERT_TRUE(wait_for_routing_table(
         lookup_client, 1, std::chrono::seconds(2)));
 
@@ -155,14 +155,12 @@ TEST(DhtClient, GetPeersRoutesByTransactionId)
     bool got_peer = false;
 
     lookup_client.set_peer_callback(
-        [&](const std::string& hash_hex,
-            const std::string& ip,
-            uint16_t port)
+        [&](const std::string& hash_hex, PeerAddress pa)
         {
             std::lock_guard<std::mutex> lk(mu);
             cb_hash = hash_hex;
-            cb_ip = ip;
-            cb_port = port;
+            cb_ip = pa.ip;
+            cb_port = pa.port;
             got_peer = true;
             cv.notify_all();
         });
@@ -205,7 +203,7 @@ TEST(DhtClient, GetPeersSeparatesMultipleInfoHashes)
     dht::DhtClient lookup_client(0);
     lookup_client.set_bootstrap_on_start(false);
     lookup_client.start();
-    lookup_client.ping("127.0.0.1", server_port);
+    lookup_client.ping(PeerAddress("127.0.0.1", server_port));
     ASSERT_TRUE(wait_for_routing_table(
         lookup_client, 1, std::chrono::seconds(2)));
 
@@ -215,14 +213,12 @@ TEST(DhtClient, GetPeersSeparatesMultipleInfoHashes)
     int callback_count = 0;
 
     lookup_client.set_peer_callback(
-        [&](const std::string& hash_hex,
-            const std::string& ip,
-            uint16_t port)
+        [&](const std::string& hash_hex, PeerAddress pa)
         {
-            if (ip != "127.0.0.1")
+            if (pa.ip != "127.0.0.1")
                 return;
             std::lock_guard<std::mutex> lk(mu);
-            seen_ports[hash_hex] = port;
+            seen_ports[hash_hex] = pa.port;
             ++callback_count;
             cv.notify_all();
         });

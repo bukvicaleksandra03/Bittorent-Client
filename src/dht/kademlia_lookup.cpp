@@ -18,7 +18,7 @@ bool KademliaLookup::all_candidates_queried() const
 {
     for (const auto& node : candidates_)
     {
-        if (queried_.find(PeerAddress{node.ip, node.port}) == queried_.end())
+        if (queried_.find(node.pa) == queried_.end())
             return false;
     }
     return true;
@@ -51,7 +51,7 @@ std::vector<RoutingEntry> KademliaLookup::select_next_candidates(size_t count)
         if (selected.size() >= count)
             break;
 
-        const PeerAddress addr{node.ip, node.port};
+        const PeerAddress& addr = node.pa;
         if (queried_.count(addr))
             continue;
 

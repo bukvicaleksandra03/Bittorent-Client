@@ -26,7 +26,7 @@ namespace dht
 {
 
 // Callback fired whenever a get_peers lookup yields live peers.
-// Arguments: info_hash (hex string), ip, port.
+// Arguments: info_hash (hex string), peer address.
 using PeerCallback =
     std::function<void(const std::string& info_hash_hex, PeerAddress pa)>;
 
@@ -75,8 +75,7 @@ class DhtClient
     // Start (or refresh) a get_peers lookup for the given 20-byte info hash.
     void get_peers(const std::string& info_hash_20);
 
-    // Register an active torrent for periodic DHT peer discovery and
-    // announce_peer refresh (info_hash_20 must be exactly 20 raw bytes).
+    // Register an active torrent for periodic DHT announce_peer refresh
     void register_torrent(const std::string& info_hash_20, uint16_t port);
 
     // Stop periodic refresh for this torrent.
@@ -98,8 +97,7 @@ class DhtClient
     // Number of nodes currently in the routing table.
     size_t routing_table_size() const;
 
-    // Shared DHT file logger (e.g. logs/dht.log from SessionManager).
-    // Call before start(); routing table uses the same instance.
+    // Shared DHT file logger
     void set_dht_logger(std::shared_ptr<logger::Logger> logger);
 
    private:
@@ -145,6 +143,9 @@ class DhtClient
     // Drop stalled iterative get_peers lookups.
     void expire_active_lookups();
 
+    // Expire stale get_peers txns and advance active lookups (recv tick).
+    void tick_get_peers_lookups();
+
     // Periodic get_peers + announce_peer for registered torrents.
     void maintain_registered_torrents();
 
@@ -155,6 +156,11 @@ class DhtClient
     };
 
     void finish_lookup(const std::string& info_hash_20);
+
+    // True when every known candidate was queried, nothing is in flight, and
+    // merging the current routing-table closest set does not add new work.
+    bool lookup_should_finish(KademliaLookup& lookup,
+                              const std::string& info_hash_20);
 
     // Send up to alpha parallel get_peers queries for an active lookup.
     std::vector<OutboundKrpc> advance_lookup(const std::string& info_hash_20);
@@ -171,6 +177,7 @@ class DhtClient
                           const std::string& token);
 
     void log_dht_info(const std::string& message) const;
+    void log_dht_debug(const std::string& message) const;
 
     // ---- Token management (Step 6) ----------------------------------------
     //
@@ -190,7 +197,6 @@ class DhtClient
     uint16_t port_;  // actual port currently bound (filled in by start())
     std::unique_ptr<UDPSocket> socket_;
 
-    mutable std::mutex table_mutex_;
     RoutingTable routing_table_;
 
     DhtPeerStore peer_store_;
@@ -203,16 +209,13 @@ class DhtClient
         pending_lookups_;
 
     // One iterative Kademlia lookup per info hash (keyed by 20-byte hash).
-    std::unordered_map<std::string, KademliaLookup> active_lookups_;
+    std::unordered_map<std::string, KademliaLookup> kademlia_lookups_;
 
-    static constexpr size_t LOOKUP_ALPHA = 3;
+    static constexpr size_t LOOKUP_ALPHA = 6;
 
     // Torrents we are actively sharing (seed/leech) that must stay visible in
     // remote DHT peer stores. BEP 5 peer entries expire after ~30 minutes
-    // unless refreshed via announce_peer; ping alone only maintains the routing
-    // table. listen_port is sent with each announce; last_refresh throttles
-    // periodic get_peers lookups (maintain_registered_torrents) that obtain
-    // fresh tokens.
+    // unless refreshed via announce_peer;
     struct RegisteredTorrent
     {
         uint16_t listen_port;
@@ -240,8 +243,12 @@ class DhtClient
     std::thread maint_thread_;
 
     std::chrono::steady_clock::time_point last_bootstrap_attempt_{};
+    std::chrono::steady_clock::time_point last_lookup_tick_{};
     bool bootstrap_connectivity_warned_{false};
     bool bootstrap_on_start_{true};
+
+    // Round-robin offset into buckets_needing_refresh(); spreads refresh load.
+    size_t refresh_bucket_cursor_{0};
     static constexpr auto BOOTSTRAP_RETRY_INTERVAL = std::chrono::minutes(2);
 
     PeerCallback peer_cb_;

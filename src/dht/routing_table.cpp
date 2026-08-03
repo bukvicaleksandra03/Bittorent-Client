@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <random>
+#include <string>
 
 #include "peer_address.h"
 
@@ -70,6 +71,7 @@ RoutingTable::RoutingTable(const NodeId& self_id) : self_id_(self_id)
 
 void RoutingTable::set_dht_logger(std::shared_ptr<logger::Logger> logger)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     dht_logger_ = std::move(logger);
 }
 
@@ -77,6 +79,33 @@ void RoutingTable::log_error(const std::string& message) const
 {
     if (dht_logger_)
         dht_logger_->error("[Routing Table] " + message);
+}
+
+void RoutingTable::log_info(const std::string& message) const
+{
+    if (dht_logger_)
+        dht_logger_->info("[Routing Table] " + message);
+}
+
+void RoutingTable::log_debug(const std::string& message) const
+{
+    if (dht_logger_)
+        dht_logger_->debug("[Routing Table] " + message);
+}
+
+void RoutingTable::log_bucket_content(size_t bucket,
+                                      const std::string& label) const
+{
+    if (bucket >= NUM_BUCKETS)
+        return;
+
+    log_debug("Bucket " + std::to_string(bucket) + " " + label + " (" +
+              std::to_string(bucket_sizes_[bucket]) + " nodes):");
+    for (size_t i = 0; i < bucket_sizes_[bucket]; ++i)
+    {
+        log_debug("  [" + std::to_string(i) + "] " +
+                  buckets_[bucket][i].to_string_detailed());
+    }
 }
 
 size_t RoutingTable::bucket_index(const NodeId& id) const
@@ -133,13 +162,18 @@ void RoutingTable::add(const RoutingEntry& entry)
     if (entry.id == self_id_ || entry.id.is_zero())
         return;
 
+    std::lock_guard<std::mutex> lock(mutex_);
+
     const size_t bucket = bucket_index(entry.id);
     if (bucket >= NUM_BUCKETS)
     {
-        log_error("routing add: no bucket for node " + entry.id.hex() + " (" +
-                  entry.pa.to_string() + ")");
+        log_error("routing add: no bucket for node " + entry.to_string());
         return;
     }
+
+    log_info("Adding routing entry " + entry.to_string() + " to bucket " +
+             std::to_string(bucket));
+    log_bucket_content(bucket, "before");
 
     if (RoutingEntry* existing = find_in_bucket(bucket, entry.id))
     {
@@ -147,12 +181,19 @@ void RoutingTable::add(const RoutingEntry& entry)
         const size_t idx =
             static_cast<size_t>(existing - buckets_[bucket].data());
         touch_bucket_entry(bucket, idx, entry);
+        log_info("The entry " + entry.to_string() +
+                 " already exists in the table. Moved to be MRU.");
+        log_bucket_content(bucket, "after");
         return;
     }
 
     if (bucket_sizes_[bucket] < K)
     {
         buckets_[bucket][bucket_sizes_[bucket]++] = entry;
+        log_info("The entry " + entry.to_string() + " added to bucket " +
+                 std::to_string(bucket) + ". New bucket size is " +
+                 std::to_string(bucket_sizes_[bucket]));
+        log_bucket_content(bucket, "after");
         return;
     }
 
@@ -169,7 +210,17 @@ void RoutingTable::add(const RoutingEntry& entry)
     }
 
     if (!buckets_[bucket][replace_idx].is_good())
+    {
         buckets_[bucket][replace_idx] = entry;
+        log_info("The entry " + entry.to_string() +
+                 " replaced stale node in bucket " + std::to_string(bucket));
+    }
+    else
+    {
+        log_info("The entry " + entry.to_string() + " dropped: bucket " +
+                 std::to_string(bucket) + " is full");
+    }
+    log_bucket_content(bucket, "after");
 }
 
 void RoutingTable::remove(const NodeId& id)
@@ -177,6 +228,8 @@ void RoutingTable::remove(const NodeId& id)
     const size_t bucket = bucket_index(id);
     if (bucket >= NUM_BUCKETS)
         return;
+
+    std::lock_guard<std::mutex> lock(mutex_);
 
     for (size_t i = 0; i < bucket_sizes_[bucket]; ++i)
     {
@@ -191,16 +244,16 @@ void RoutingTable::remove(const NodeId& id)
 
 size_t RoutingTable::size() const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     size_t total = 0;
     for (size_t n : bucket_sizes_)
         total += n;
     return total;
 }
 
-std::vector<RoutingEntry> RoutingTable::all() const
+std::vector<RoutingEntry> RoutingTable::all_unlocked() const
 {
     std::vector<RoutingEntry> out;
-    out.reserve(size());
     for (size_t b = 0; b < NUM_BUCKETS; ++b)
     {
         for (size_t i = 0; i < bucket_sizes_[b]; ++i)
@@ -209,10 +262,17 @@ std::vector<RoutingEntry> RoutingTable::all() const
     return out;
 }
 
+std::vector<RoutingEntry> RoutingTable::all() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return all_unlocked();
+}
+
 std::vector<RoutingEntry> RoutingTable::closest(const NodeId& target,
                                                 size_t k) const
 {
-    std::vector<RoutingEntry> sorted = all();
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<RoutingEntry> sorted = all_unlocked();
     std::sort(sorted.begin(),
               sorted.end(),
               [&target](const RoutingEntry& a, const RoutingEntry& b)
@@ -262,6 +322,7 @@ std::vector<size_t> RoutingTable::buckets_needing_refresh(
     std::chrono::steady_clock::time_point now,
     std::chrono::minutes max_age) const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     std::vector<size_t> out;
     for (size_t b = 0; b < NUM_BUCKETS; ++b)
     {
