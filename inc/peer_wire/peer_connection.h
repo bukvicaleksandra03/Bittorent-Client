@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "crypto.h"
+#include "info_hash.h"
 #include "logger.h"
 #include "net/socket.h"
 #include "peer_address.h"
@@ -19,7 +20,7 @@ class PeerConnection
     // lg is the per-peer Logger created by TorrentManager. Every PeerConnection
     // writes to its own file, so peer threads never share a log mutex.
     PeerConnection(PeerAddress peer,
-                   crypto::SHA1Hash info_hash,
+                   InfoHash info_hash,
                    utils::PeerId my_peer_id,
                    PieceManager& piece_manager,
                    std::shared_ptr<logger::Logger> lg);
@@ -72,7 +73,9 @@ class PeerConnection
    private:
     // ---- networking helpers ----
     void recv_exact(uint8_t* buf, size_t n);
-    void recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms,
+    void recv_exact_timeout(uint8_t* buf,
+                            size_t n,
+                            int timeout_ms,
                             const std::string& context = "handshake");
     void send_bytes(const uint8_t* buf, size_t n);
     void send_message(const peer_wire::PeerMessage& msg);
@@ -112,7 +115,7 @@ class PeerConnection
     std::atomic<uint64_t> m_bytes_uploaded{0};
     // Number of blocks (Piece messages) served; updated inside handle_request.
     std::atomic<uint64_t> m_blocks_uploaded{0};
-    crypto::SHA1Hash m_info_hash;
+    InfoHash m_info_hash;
     utils::PeerId m_my_peer_id;
     bool m_connected = false;
     std::shared_ptr<logger::Logger> m_logger;

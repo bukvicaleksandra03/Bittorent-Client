@@ -28,6 +28,13 @@ NodeId NodeId::from_string(const std::string& s)
     return id;
 }
 
+NodeId NodeId::from_info_hash(const InfoHash& hash)
+{
+    NodeId id;
+    std::memcpy(id.bytes.data(), hash.bytes.data(), 20);
+    return id;
+}
+
 std::string NodeId::to_string() const
 {
     return std::string(reinterpret_cast<const char*>(bytes.data()), 20);

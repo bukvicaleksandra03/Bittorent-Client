@@ -4,9 +4,22 @@
 #include <gtest/gtest.h>
 
 #include "dht/dht_client.h"
+#include "info_hash.h"
 
 #include <chrono>
 #include <thread>
+
+namespace
+{
+
+InfoHash make_info_hash(char fill = '\xAB')
+{
+    InfoHash h;
+    h.bytes.fill(static_cast<uint8_t>(fill));
+    return h;
+}
+
+}  // namespace
 
 // ===========================================================================
 // DhtClient – lifecycle only (no real network activity)
@@ -49,10 +62,10 @@ TEST(DhtClient, RoutingTableInitiallyEmpty)
 TEST(DhtClient, RegisterUnregisterTorrent)
 {
     dht::DhtClient client(0);
-    std::string info_hash(20, '\xAB');
+    const InfoHash info_hash = make_info_hash();
 
     EXPECT_NO_THROW(client.register_torrent(info_hash, 6881));
-    EXPECT_NO_THROW(client.register_torrent("", 6881));
+    EXPECT_NO_THROW(client.register_torrent(InfoHash{}, 6881));
     EXPECT_NO_THROW(client.unregister_torrent(info_hash));
 
     client.start();

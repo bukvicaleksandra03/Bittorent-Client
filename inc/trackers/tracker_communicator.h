@@ -3,7 +3,7 @@
 #include <memory>
 #include <vector>
 
-#include "crypto.h"
+#include "info_hash.h"
 #include "logger.h"
 #include "peer_address.h"
 #include "trackers/tracker_details.h"
@@ -20,7 +20,7 @@ class TrackerCommunicator
     virtual ~TrackerCommunicator() = default;
 
     virtual std::vector<PeerAddress> announce(const TrackerDetails& tracker,
-                                       const crypto::SHA1Hash& info_hash,
+                                       const InfoHash& info_hash,
                                        const utils::PeerId& my_peer_id,
                                        uint64_t downloaded,
                                        uint64_t left,

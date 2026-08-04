@@ -24,7 +24,7 @@ static bool poll_readable(int fd, int timeout_ms)
 
 std::vector<PeerAddress> UDPTrackerCommunicator::announce(
     const TrackerDetails& tracker,
-    const crypto::SHA1Hash& info_hash,
+    const InfoHash& info_hash,
     const utils::PeerId& my_peer_id,
     uint64_t downloaded,
     uint64_t left,
@@ -84,7 +84,7 @@ std::vector<PeerAddress> UDPTrackerCommunicator::announce(
 
 std::vector<PeerAddress> UDPTrackerCommunicator::try_announce_to(
     const Address& tracker_addr,
-    const crypto::SHA1Hash& info_hash,
+    const InfoHash& info_hash,
     const utils::PeerId& my_peer_id,
     uint64_t downloaded,
     uint64_t left,

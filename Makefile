@@ -47,6 +47,8 @@ SOURCES = $(SRC_DIR)/net/socket.cpp \
           $(SRC_DIR)/dht/krpc.cpp \
           $(SRC_DIR)/dht/dht_peer_store.cpp \
           $(SRC_DIR)/dht/kademlia_lookup.cpp \
+          $(SRC_DIR)/dht/token_secret_rotator.cpp \
+          $(SRC_DIR)/dht/announce_coordinator.cpp \
           $(SRC_DIR)/dht/dht_client.cpp
 OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(SOURCES))
 

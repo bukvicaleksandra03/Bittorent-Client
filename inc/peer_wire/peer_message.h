@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "crypto.h"
+#include "info_hash.h"
 #include "utils.h"
 
 namespace peer_wire
@@ -28,7 +29,7 @@ struct Handshake
 {
     std::array<uint8_t, 8>
         reserved{};  // reserved for future protocol extensions
-    crypto::SHA1Hash info_hash;
+    InfoHash info_hash;
     utils::PeerId peer_id;
 
     std::vector<uint8_t> serialize() const;

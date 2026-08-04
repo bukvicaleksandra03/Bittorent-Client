@@ -123,8 +123,7 @@ void SessionManager::start_all()
         {
             if (s)
             {
-                m_dht_client->register_torrent(s->info_hash_str(),
-                                               m_listen_port);
+                m_dht_client->register_torrent(s->info_hash(), m_listen_port);
                 s->start();
             }
         }

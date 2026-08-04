@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "info_hash.h"
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
 #include "peer_address.h"
@@ -31,12 +32,12 @@ std::string make_find_node(const std::string& txn,
 // q=get_peers
 std::string make_get_peers(const std::string& txn,
                            const NodeId& self_id,
-                           const std::string& info_hash_20);
+                           const InfoHash& info_hash);
 
 // q=announce_peer
 std::string make_announce_peer(const std::string& txn,
                                const NodeId& self_id,
-                               const std::string& info_hash_20,
+                               const InfoHash& info_hash,
                                uint16_t port,
                                const std::string& token,
                                bool implied_port = false);
@@ -93,7 +94,7 @@ struct KrpcMessage
     std::optional<KrpcQuery> query_type;
     NodeId sender_id;
     NodeId target;             // find_node
-    std::string info_hash;     // get_peers / announce_peer (20 bytes)
+    std::optional<InfoHash> info_hash;  // get_peers / announce_peer
     uint16_t peer_port{0};     // announce_peer
     std::string token;         // announce_peer / get_peers response
     bool implied_port{false};  // announce_peer

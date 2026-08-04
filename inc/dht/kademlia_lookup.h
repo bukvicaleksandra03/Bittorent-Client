@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "info_hash.h"
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
 #include "peer_address.h"
@@ -32,12 +33,12 @@ namespace dht
 class KademliaLookup
 {
    public:
-    KademliaLookup(std::string info_hash_20,
+    KademliaLookup(InfoHash info_hash,
                    std::vector<RoutingEntry> seed_candidates);
 
-    const std::string& info_hash() const
+    const InfoHash& info_hash() const
     {
-        return info_hash_20_;
+        return info_hash_;
     }
 
     const NodeId& target() const
@@ -95,7 +96,7 @@ class KademliaLookup
     std::vector<RoutingEntry> select_next_candidates(size_t count);
 
    private:
-    std::string info_hash_20_;
+    InfoHash info_hash_;
     NodeId target_;
     std::vector<RoutingEntry> candidates_;
     std::set<PeerAddress> queried_;

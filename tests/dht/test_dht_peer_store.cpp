@@ -7,17 +7,18 @@
 #include <string>
 
 #include "dht/dht_peer_store.h"
+#include "info_hash.h"
 
 namespace
 {
 
-std::string make_info_hash(size_t n)
+InfoHash make_info_hash(size_t n)
 {
-    std::string key(20, '\0');
-    key[0] = static_cast<char>((n >> 24) & 0xFF);
-    key[1] = static_cast<char>((n >> 16) & 0xFF);
-    key[2] = static_cast<char>((n >> 8) & 0xFF);
-    key[3] = static_cast<char>(n & 0xFF);
+    InfoHash key;
+    key.bytes[0] = static_cast<uint8_t>((n >> 24) & 0xFF);
+    key.bytes[1] = static_cast<uint8_t>((n >> 16) & 0xFF);
+    key.bytes[2] = static_cast<uint8_t>((n >> 8) & 0xFF);
+    key.bytes[3] = static_cast<uint8_t>(n & 0xFF);
     return key;
 }
 
@@ -26,15 +27,15 @@ std::string make_info_hash(size_t n)
 TEST(DhtPeerStore, EvictsLeastRecentlyUsedInfoHashWhenAtCapacity)
 {
     dht::DhtPeerStore store;
-    const std::string compact(6, '\x01');
+    const PeerAddress peer("127.0.0.1", 6881);
 
     for (size_t i = 0; i < 10000; ++i)
-        store.upsert(make_info_hash(i), compact);
+        store.upsert(make_info_hash(i), peer);
 
     // Refresh hash 0 so hash 1 becomes the LRU bucket when we insert hash
     // 10000.
-    store.upsert(make_info_hash(0), compact);
-    store.upsert(make_info_hash(10000), compact);
+    store.upsert(make_info_hash(0), peer);
+    store.upsert(make_info_hash(10000), peer);
 
     EXPECT_FALSE(store.live_peers(make_info_hash(0)).empty())
         << "refreshed hash 0 should remain";

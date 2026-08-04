@@ -12,9 +12,12 @@
 #include <unordered_map>
 #include <vector>
 
+#include "dht/announce_coordinator.h"
+#include "info_hash.h"
 #include "dht/dht_peer_store.h"
 #include "dht/kademlia_lookup.h"
 #include "dht/krpc.h"
+#include "dht/token_secret_rotator.h"
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
 #include "logger.h"
@@ -37,9 +40,9 @@ using PeerCallback =
 //   DhtClient node(6881);
 //   node.set_peer_callback(cb);
 //   node.start();
-//   node.register_torrent(info_hash_20, listen_port);
+//   node.register_torrent(info_hash, listen_port);
 //   // maintenance_loop re-runs get_peers and announce_peer on a schedule
-//   node.unregister_torrent(info_hash_20);
+//   node.unregister_torrent(info_hash);
 //   node.stop();
 // ---------------------------------------------------------------------------
 class DhtClient
@@ -72,21 +75,21 @@ class DhtClient
     // Register a callback that fires when peers are found for a torrent.
     void set_peer_callback(PeerCallback cb);
 
-    // Start (or refresh) a get_peers lookup for the given 20-byte info hash.
-    void get_peers(const std::string& info_hash_20);
+    // Start (or refresh) a get_peers lookup for the given info hash.
+    void get_peers(const InfoHash& info_hash);
 
-    // Register an active torrent for periodic DHT announce_peer refresh
-    void register_torrent(const std::string& info_hash_20, uint16_t port);
+    // Register an active torrent for periodic DHT announce_peer refresh.
+    void register_torrent(const InfoHash& info_hash, uint16_t port);
 
     // Stop periodic refresh for this torrent.
-    void unregister_torrent(const std::string& info_hash_20);
+    void unregister_torrent(const InfoHash& info_hash);
 
     // Send a ping to a specific node (useful for loopback bootstrap / tests).
     void ping(PeerAddress pa);
 
     // Announce to every node that has returned a token.  Prefer
     // register_torrent() for long-lived seeding sessions.
-    void announce(const std::string& info_hash_20, uint16_t port);
+    void announce(const InfoHash& info_hash, uint16_t port);
 
     // Read-only view of our node ID (useful for logging / integration tests).
     const NodeId& self_id() const
@@ -155,40 +158,21 @@ class DhtClient
         PeerAddress pa;
     };
 
-    void finish_lookup(const std::string& info_hash_20);
+    void finish_lookup(const InfoHash& info_hash);
 
     // True when every known candidate was queried, nothing is in flight, and
     // merging the current routing-table closest set does not add new work.
-    bool lookup_should_finish(KademliaLookup& lookup,
-                              const std::string& info_hash_20);
+    bool lookup_should_finish(KademliaLookup& lookup, const InfoHash& info_hash);
 
     // Send up to alpha parallel get_peers queries for an active lookup.
-    std::vector<OutboundKrpc> advance_lookup(const std::string& info_hash_20);
+    std::vector<OutboundKrpc> advance_lookup(const InfoHash& info_hash);
 
-    void on_lookup_response(const KrpcMessage& msg,
-                            const std::string& info_hash_20);
+    void on_lookup_response(const KrpcMessage& msg, const InfoHash& info_hash);
 
-    // If msg.txn belongs to a registered torrent, announce to the responder.
-    void maybe_announce_registered(const KrpcMessage& msg, PeerAddress pa);
-
-    void announce_to_node(const std::string& info_hash_20,
-                          uint16_t listen_port,
-                          PeerAddress pa,
-                          const std::string& token);
+    void send_announce_requests(const std::vector<AnnounceRequest>& requests);
 
     void log_dht_info(const std::string& message) const;
     void log_dht_debug(const std::string& message) const;
-
-    // ---- Token management (Step 6) ----------------------------------------
-    //
-    // Tokens are short secrets returned in get_peers responses.  A remote
-    // node must echo back the token in a subsequent announce_peer request to
-    // prove it recently contacted us.  We rotate tokens every 5 minutes so
-    // old tokens are only valid for ≤10 minutes.
-
-    std::string current_token() const;
-    bool verify_token(const std::string& token) const;
-    void rotate_token_if_needed();
 
     // ---- State -------------------------------------------------------------
 
@@ -200,37 +184,20 @@ class DhtClient
     RoutingTable routing_table_;
 
     DhtPeerStore peer_store_;
-    std::unordered_map<PeerAddress, std::string> received_tokens_;
-    // KRPC transaction id -> info_hash (20 bytes) for in-flight get_peers
-    // lookups.
+    TokenSecretRotator token_rotator_;
+    AnnounceCoordinator announce_coordinator_;
+    // KRPC transaction id -> info_hash for in-flight get_peers lookups.
     std::unordered_map<
         std::string,
-        std::pair<std::string, std::chrono::steady_clock::time_point>>
+        std::pair<InfoHash, std::chrono::steady_clock::time_point>>
         pending_lookups_;
 
-    // One iterative Kademlia lookup per info hash (keyed by 20-byte hash).
-    std::unordered_map<std::string, KademliaLookup> kademlia_lookups_;
+    // One iterative Kademlia lookup per info hash.
+    std::unordered_map<InfoHash, KademliaLookup> kademlia_lookups_;
 
     static constexpr size_t LOOKUP_ALPHA = 6;
 
-    // Torrents we are actively sharing (seed/leech) that must stay visible in
-    // remote DHT peer stores. BEP 5 peer entries expire after ~30 minutes
-    // unless refreshed via announce_peer;
-    struct RegisteredTorrent
-    {
-        uint16_t listen_port;
-        std::chrono::steady_clock::time_point last_refresh;
-    };
-
-    std::unordered_map<std::string, RegisteredTorrent> registered_torrents_;
-    mutable std::mutex registered_mutex_;
     mutable std::mutex peers_mutex_;
-
-    // Token rotation
-    mutable std::mutex token_mutex_;
-    std::string current_token_;
-    std::string prev_token_;
-    std::chrono::steady_clock::time_point last_token_rotation_{};
 
     std::atomic<bool> running_{false};
 

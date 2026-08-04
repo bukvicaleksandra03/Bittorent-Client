@@ -14,7 +14,7 @@ TorrentFile::TorrentFile(std::shared_ptr<BDict> metadata_dict,
         throw std::runtime_error(
             "Cannot calculate info_hash: no info bytes provided");
     }
-    info_hash = crypto::sha1(info_bytes);
+    info_hash = InfoHash::from_sha1(crypto::sha1(info_bytes));
 
     // Announce
     // TODO - BEP 5 - no need for announce field
@@ -141,7 +141,7 @@ void TorrentFile::print(std::ostream& os)
        << utils::format_byte_size(total_size) << ")" << std::endl;
     os << "Piece size: " << piece_size << std::endl;
     os << "Piece count: " << pieces.size() << std::endl;
-    os << "Info hash: " << crypto::to_hex(info_hash) << std::endl;
+    os << "Info hash: " << info_hash.hex() << std::endl;
     os << "Is private: " << (is_private ? "yes" : "no") << std::endl;
     os << "Is multifile: " << (is_multifile ? "yes" : "no") << std::endl;
     os << "Tracker (" << announce_tracker.to_string() << "):" << std::endl;

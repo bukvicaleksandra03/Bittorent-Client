@@ -22,7 +22,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
     {}
 
     std::vector<PeerAddress> announce(const TrackerDetails& tracker,
-                               const crypto::SHA1Hash& info_hash,
+                               const InfoHash& info_hash,
                                const utils::PeerId& my_peer_id,
                                uint64_t downloaded,
                                uint64_t left,
@@ -32,7 +32,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
 
    private:
     std::vector<PeerAddress> try_announce_to(const Address& addr,
-                                      const crypto::SHA1Hash& info_hash,
+                                      const InfoHash& info_hash,
                                       const utils::PeerId& my_peer_id,
                                       uint64_t downloaded,
                                       uint64_t left,
@@ -103,7 +103,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
         uint64_t connection_id;
         uint32_t action = 1;  // 1 = announce
         uint32_t transaction_id;
-        crypto::SHA1Hash info_hash;
+        InfoHash info_hash;
         utils::PeerId peer_id;
         uint64_t downloaded;
         uint64_t left;
@@ -125,7 +125,7 @@ class UDPTrackerCommunicator : public TrackerCommunicator
             p += 4;
             byte_order::write_be32(p, transaction_id);
             p += 4;
-            std::copy(info_hash.begin(), info_hash.end(), p);
+            std::copy(info_hash.bytes.begin(), info_hash.bytes.end(), p);
             p += 20;
             std::copy(peer_id.begin(), peer_id.end(), p);
             p += 20;

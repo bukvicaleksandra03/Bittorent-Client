@@ -27,9 +27,6 @@ static const std::vector<std::pair<std::string, uint16_t>> BOOTSTRAP_NODES = {
     {"router.utorrent.com", 6881},
 };
 
-// How often to rotate the token secret (5 minutes).
-static constexpr auto TOKEN_ROTATE_INTERVAL = std::chrono::minutes(5);
-
 // How often to run the maintenance loop.
 static constexpr auto MAINT_INTERVAL = std::chrono::seconds(60);
 
@@ -46,26 +43,6 @@ static constexpr auto GET_PEERS_LOOKUP_TTL = std::chrono::minutes(5);
 // How often recv_loop expires get_peers txns and refills alpha parallelism.
 static constexpr auto LOOKUP_TICK_INTERVAL = std::chrono::seconds(5);
 
-// Re-run get_peers (and announce on token) for registered torrents.  Must stay
-// below PEER_ENTRY_TTL (30 min) in dht_peer_store.h.
-static constexpr auto ANNOUNCE_REFRESH_INTERVAL = std::chrono::minutes(12);
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// Generate a random token secret (8 bytes, hex-encoded).
-static std::string make_token_secret()
-{
-    static std::mt19937 gen(std::random_device{}());
-    static std::uniform_int_distribution<unsigned> dist(0, 255);
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (int i = 0; i < 8; ++i)
-        oss << std::setw(2) << dist(gen);
-    return oss.str();
-}
-
 // ---------------------------------------------------------------------------
 // Construction / destruction
 // ---------------------------------------------------------------------------
@@ -74,10 +51,7 @@ DhtClient::DhtClient(uint16_t port)
     : self_id_(NodeId::random()),
       requested_port_(port),
       port_(port),
-      routing_table_(self_id_),
-      current_token_(make_token_secret()),
-      prev_token_(make_token_secret()),
-      last_token_rotation_(std::chrono::steady_clock::now())
+      routing_table_(self_id_)
 {
 }
 
@@ -160,8 +134,7 @@ void DhtClient::stop()
         maint_thread_.join();
 
     {
-        std::lock_guard<std::mutex> lk(registered_mutex_);
-        registered_torrents_.clear();
+        announce_coordinator_.clear();
     }
 
     socket_.reset();
@@ -229,57 +202,43 @@ void DhtClient::log_dht_debug(const std::string& message) const
         dht_logger_->debug("[DHT] " + message);
 }
 
-void DhtClient::register_torrent(const std::string& info_hash_20, uint16_t port)
+void DhtClient::register_torrent(const InfoHash& info_hash, uint16_t port)
 {
-    if (info_hash_20.size() != 20)
-        return;
-
-    {
-        std::lock_guard<std::mutex> lk(registered_mutex_);
-        registered_torrents_[info_hash_20] =
-            RegisteredTorrent{port, std::chrono::steady_clock::now()};
-    }
+    announce_coordinator_.register_torrent(info_hash, port);
 
     if (running_.load())
-        get_peers(info_hash_20);
+        get_peers(info_hash);
 }
 
-void DhtClient::unregister_torrent(const std::string& info_hash_20)
+void DhtClient::unregister_torrent(const InfoHash& info_hash)
 {
-    if (info_hash_20.size() != 20)
-        return;
-
-    std::lock_guard<std::mutex> lk(registered_mutex_);
-    registered_torrents_.erase(info_hash_20);
+    announce_coordinator_.unregister_torrent(info_hash);
 }
 
 // Starts (or advances) an iterative DHT lookup for peers of the given
-// 20-byte info_hash. This is called both for a brand-new torrent and
+// info_hash. This is called both for a brand-new torrent and
 // repeatedly (e.g. on a timer) to drive an in-progress lookup forward,
 // since get_peers is non-blocking: it fires off KRPC queries and returns
 // immediately, with results/continuations handled later in
 // on_lookup_response.
-void DhtClient::get_peers(const std::string& info_hash_20)
+void DhtClient::get_peers(const InfoHash& info_hash)
 {
-    if (info_hash_20.size() != 20)
-        return;
-
     // Seed candidates from our own routing table: the K nodes we know of
     // that are closest (by XOR distance) to the info_hash. These are the
     // starting point for the iterative lookup.
     std::vector<RoutingEntry> closest = routing_table_.closest(
-        NodeId::from_string(info_hash_20), RoutingTable::K);
+        NodeId::from_info_hash(info_hash), RoutingTable::K);
 
     if (closest.empty())
     {
         log_dht_info("get_peers: no routing-table candidates for " +
-                     bytes_to_hex(info_hash_20));
+                     info_hash.hex());
         return;
     }
 
     // Make sure a peer bucket exists for this torrent so peers discovered
     // later have somewhere to be stored.
-    peer_store_.ensure_bucket(info_hash_20);
+    peer_store_.ensure_bucket(info_hash);
 
     std::vector<OutboundKrpc> outbound;
     bool started_new = false;
@@ -292,7 +251,7 @@ void DhtClient::get_peers(const std::string& info_hash_20)
         expire_pending_lookups();
         expire_active_lookups();
 
-        auto it = kademlia_lookups_.find(info_hash_20);
+        auto it = kademlia_lookups_.find(info_hash);
         if (it != kademlia_lookups_.end())
         {
             // A lookup for this info_hash is already running. If we're
@@ -302,7 +261,7 @@ void DhtClient::get_peers(const std::string& info_hash_20)
             {
                 skipped_pending = true;
             }
-            else if (lookup_should_finish(it->second, info_hash_20))
+            else if (lookup_should_finish(it->second, info_hash))
             {
                 kademlia_lookups_.erase(it);
                 cleared_exhausted = true;
@@ -310,25 +269,25 @@ void DhtClient::get_peers(const std::string& info_hash_20)
             else if (it->second.all_candidates_queried())
             {
                 // Replenish added unqueried candidates; send the next batch.
-                outbound = advance_lookup(info_hash_20);
+                outbound = advance_lookup(info_hash);
             }
             else
             {
                 // There are still unqueried candidates left; send the next
                 // batch of queries (up to LOOKUP_ALPHA at a time).
-                outbound = advance_lookup(info_hash_20);
+                outbound = advance_lookup(info_hash);
             }
         }
 
         // No lookup is currently active for this info_hash (either this is
         // the first call, or the stale one above was just erased) -- start
         // a fresh iterative lookup seeded with the closest nodes we found.
-        if (outbound.empty() && kademlia_lookups_.count(info_hash_20) == 0)
+        if (outbound.empty() && kademlia_lookups_.count(info_hash) == 0)
         {
             kademlia_lookups_.emplace(
-                info_hash_20, KademliaLookup(info_hash_20, std::move(closest)));
+                info_hash, KademliaLookup(info_hash, std::move(closest)));
             started_new = true;
-            outbound = advance_lookup(info_hash_20);
+            outbound = advance_lookup(info_hash);
         }
     }
 
@@ -338,7 +297,7 @@ void DhtClient::get_peers(const std::string& info_hash_20)
         send_krpc(o.msg, o.pa);
 
     std::ostringstream oss;
-    oss << "get_peers: hash=" << bytes_to_hex(info_hash_20)
+    oss << "get_peers: hash=" << info_hash.hex()
         << " outbound=" << outbound.size();
     if (started_new)
         oss << " started_new=1";
@@ -354,21 +313,29 @@ void DhtClient::ping(PeerAddress pa)
     send_krpc(make_ping(random_txn(), self_id_), pa);
 }
 
-void DhtClient::announce(const std::string& info_hash_20, uint16_t port)
+void DhtClient::announce(const InfoHash& info_hash, uint16_t port)
 {
-    std::vector<std::pair<PeerAddress, std::string>> tokens_to_announce;
-    {
-        std::lock_guard<std::mutex> lk(peers_mutex_);
-        for (const auto& [peer_addr, token] : received_tokens_)
-            tokens_to_announce.push_back({peer_addr, token});
-    }
+    std::vector<AnnounceRequest> requests;
+    announce_coordinator_.collect_announce_all(info_hash, port, requests);
+    send_announce_requests(requests);
+}
 
-    for (const auto& [peer_addr, token] : tokens_to_announce)
+void DhtClient::send_announce_requests(
+    const std::vector<AnnounceRequest>& requests)
+{
+    for (const auto& req : requests)
     {
-        std::string txn = random_txn();
-        std::string msg =
-            make_announce_peer(txn, self_id_, info_hash_20, port, token, true);
-        send_krpc(msg, peer_addr);
+        if (req.token.empty())
+            continue;
+
+        const std::string txn = random_txn();
+        send_krpc(make_announce_peer(txn,
+                                     self_id_,
+                                     req.info_hash,
+                                     req.listen_port,
+                                     req.token,
+                                     true),
+                  req.pa);
     }
 }
 
@@ -503,13 +470,17 @@ void DhtClient::on_find_node(const KrpcMessage& msg, PeerAddress pa)
 
 void DhtClient::on_get_peers(const KrpcMessage& msg, PeerAddress pa)
 {
-    rotate_token_if_needed();
-    std::string token = current_token();
+    if (!msg.info_hash)
+        return;
+
+    token_rotator_.rotate_if_needed();
+    const std::string token = token_rotator_.current_token();
+    const InfoHash& info_hash = *msg.info_hash;
 
     // Check if we know any live peers for this info_hash.
     peer_store_.expire_stale();
     const std::vector<PeerAddress> known_peers =
-        peer_store_.live_peers(msg.info_hash);
+        peer_store_.live_peers(info_hash);
 
     if (!known_peers.empty())
     {
@@ -519,7 +490,7 @@ void DhtClient::on_get_peers(const KrpcMessage& msg, PeerAddress pa)
     else
     {
         std::vector<RoutingEntry> closest =
-            routing_table_.closest(NodeId::from_string(msg.info_hash), 8);
+            routing_table_.closest(NodeId::from_info_hash(info_hash), 8);
         send_krpc(make_nodes_response_gp(msg.txn, self_id_, token, closest),
                   pa);
     }
@@ -527,22 +498,27 @@ void DhtClient::on_get_peers(const KrpcMessage& msg, PeerAddress pa)
 
 void DhtClient::on_announce_peer(const KrpcMessage& msg, PeerAddress pa)
 {
+    if (!msg.info_hash)
+        return;
+
     // Verify the token.
-    if (!verify_token(msg.token))
+    if (!token_rotator_.verify_token(msg.token))
     {
         send_krpc(make_error(msg.txn, 203, "Bad token"), pa);
         return;
     }
+
+    const InfoHash& info_hash = *msg.info_hash;
 
     // BEP 5: implied_port=1 -> use UDP source port; else use "port" from
     // message.
     if (!msg.implied_port)
         pa.port = msg.peer_port;
 
-    peer_store_.upsert(msg.info_hash, pa);
+    peer_store_.upsert(info_hash, pa);
 
     // Fire the callback so the torrent layer learns about this peer.
-    invoke_peer_callback(bytes_to_hex(msg.info_hash), pa);
+    invoke_peer_callback(info_hash.hex(), pa);
 
     send_krpc(make_response(msg.txn, self_id_), pa);
 }
@@ -557,20 +533,28 @@ void DhtClient::on_response(const KrpcMessage& msg, PeerAddress pa)
     for (const auto& n : msg.nodes)
         routing_table_.add(n);
 
-    // Store any token for future announce_peer.
+    std::vector<AnnounceRequest> announce_requests;
     if (!msg.token.empty())
     {
-        std::lock_guard<std::mutex> lk(peers_mutex_);
-        received_tokens_[pa] = msg.token;
+        std::optional<InfoHash> info_hash_for_announce;
+        {
+            std::lock_guard<std::mutex> lk(peers_mutex_);
+            auto pit = pending_lookups_.find(msg.txn);
+            if (pit != pending_lookups_.end())
+                info_hash_for_announce = pit->second.first;
+        }
+        if (info_hash_for_announce)
+        {
+            announce_coordinator_.on_get_peers_response(
+                *info_hash_for_announce, pa, msg.token, announce_requests);
+        }
     }
-
-    maybe_announce_registered(msg, pa);
 
     // Resolve this response to the torrent lookup that sent it.
     // pending_lookups_ maps txn -> (info_hash, sent_at); advance_lookup
     // registers each outbound get_peers query there so any inbound reply can be
     // routed back.
-    std::string info_hash_20;
+    std::optional<InfoHash> lookup_hash;
     // Queued follow-up queries; built under the lock, sent after it is released
     // so we never hold peers_mutex_ during network I/O.
     std::vector<OutboundKrpc> outbound;
@@ -579,21 +563,22 @@ void DhtClient::on_response(const KrpcMessage& msg, PeerAddress pa)
         auto pit = pending_lookups_.find(msg.txn);
         if (pit == pending_lookups_.end())
         {
+            send_announce_requests(announce_requests);
             return;
         }
 
-        info_hash_20 = pit->second.first;
+        lookup_hash = pit->second.first;
 
         // If an iterative get_peers lookup is still active for this torrent,
         // fold the reply into KademliaLookup state and maybe send the next
         // batch of queries (up to LOOKUP_ALPHA in flight).
-        if (kademlia_lookups_.count(info_hash_20))
+        if (kademlia_lookups_.count(*lookup_hash))
         {
-            on_lookup_response(msg, info_hash_20);
+            on_lookup_response(msg, *lookup_hash);
             // on_lookup_response may finish the lookup (peers found or
             // exhausted); only advance if it is still running.
-            if (kademlia_lookups_.count(info_hash_20))
-                outbound = advance_lookup(info_hash_20);
+            if (kademlia_lookups_.count(*lookup_hash))
+                outbound = advance_lookup(*lookup_hash);
         }
 
         // This transaction id is fully handled; drop the routing entry.
@@ -603,9 +588,9 @@ void DhtClient::on_response(const KrpcMessage& msg, PeerAddress pa)
     // get_peers replies may carry compact peer lists even when the lookup
     // continues (nodes-only responses). Persist peers and notify the torrent
     // layer regardless of whether kademlia_lookups_ still has an entry.
-    if (!info_hash_20.empty() && !msg.values.empty())
+    if (lookup_hash && !msg.values.empty())
     {
-        const std::string info_hash_hex = bytes_to_hex(info_hash_20);
+        const std::string info_hash_hex = lookup_hash->hex();
 
         for (const auto& compact : msg.values)
         {
@@ -614,7 +599,7 @@ void DhtClient::on_response(const KrpcMessage& msg, PeerAddress pa)
             if (!compact_to_peer(compact, 0, peer_ip, peer_port))
                 continue;
 
-            peer_store_.upsert(info_hash_20, PeerAddress(peer_ip, peer_port));
+            peer_store_.upsert(*lookup_hash, PeerAddress(peer_ip, peer_port));
             invoke_peer_callback(info_hash_hex,
                                  PeerAddress(peer_ip, peer_port));
         }
@@ -622,6 +607,8 @@ void DhtClient::on_response(const KrpcMessage& msg, PeerAddress pa)
 
     for (const auto& o : outbound)
         send_krpc(o.msg, o.pa);
+
+    send_announce_requests(announce_requests);
 }
 
 // ---------------------------------------------------------------------------
@@ -691,7 +678,7 @@ void DhtClient::maintenance_loop()
             break;
 
         lk.unlock();
-        rotate_token_if_needed();
+        token_rotator_.rotate_if_needed();
         {
             std::lock_guard<std::mutex> peers_lk(peers_mutex_);
             expire_active_lookups();
@@ -734,7 +721,7 @@ void DhtClient::expire_pending_lookups()
         if (now - it->second.second >= GET_PEERS_TXN_TTL)
         {
             const std::string& txn = it->first;
-            const std::string& hash = it->second.first;
+            const InfoHash& hash = it->second.first;
             auto ait = kademlia_lookups_.find(hash);
             if (ait != kademlia_lookups_.end())
                 ait->second.remove_pending_txn(txn);
@@ -760,7 +747,7 @@ void DhtClient::expire_active_lookups()
         {
             for (const auto& txn : it->second.pending_txns())
                 pending_lookups_.erase(txn);
-            expired_hashes.push_back(bytes_to_hex(it->first));
+            expired_hashes.push_back(it->first.hex());
             it = kademlia_lookups_.erase(it);
         }
         else
@@ -792,13 +779,13 @@ void DhtClient::tick_get_peers_lookups()
         std::lock_guard<std::mutex> lk(peers_mutex_);
         expire_pending_lookups();
 
-        std::vector<std::string> hashes;
+        std::vector<InfoHash> hashes;
         active_count = kademlia_lookups_.size();
         hashes.reserve(active_count);
         for (const auto& [hash, _] : kademlia_lookups_)
             hashes.push_back(hash);
 
-        for (const auto& hash : hashes)
+        for (const InfoHash& hash : hashes)
         {
             auto batch = advance_lookup(hash);
             outbound.insert(outbound.end(),
@@ -815,9 +802,9 @@ void DhtClient::tick_get_peers_lookups()
         " outbound=" + std::to_string(outbound.size()));
 }
 
-void DhtClient::finish_lookup(const std::string& info_hash_20)
+void DhtClient::finish_lookup(const InfoHash& info_hash)
 {
-    auto it = kademlia_lookups_.find(info_hash_20);
+    auto it = kademlia_lookups_.find(info_hash);
     if (it == kademlia_lookups_.end())
         return;
 
@@ -825,17 +812,17 @@ void DhtClient::finish_lookup(const std::string& info_hash_20)
         pending_lookups_.erase(txn);
     kademlia_lookups_.erase(it);
     log_dht_info("finish_lookup: completed kademlia lookup for " +
-                 bytes_to_hex(info_hash_20));
+                 info_hash.hex());
 }
 
 bool DhtClient::lookup_should_finish(KademliaLookup& lookup,
-                                     const std::string& info_hash_20)
+                                     const InfoHash& info_hash)
 {
     if (lookup.has_pending() || !lookup.all_candidates_queried())
         return false;
 
     std::vector<RoutingEntry> closest = routing_table_.closest(
-        NodeId::from_string(info_hash_20), RoutingTable::K);
+        NodeId::from_info_hash(info_hash), RoutingTable::K);
 
     if (!closest.empty())
     {
@@ -843,7 +830,7 @@ bool DhtClient::lookup_should_finish(KademliaLookup& lookup,
         if (!lookup.all_candidates_queried())
         {
             log_dht_info("lookup replenished from routing table hash=" +
-                         bytes_to_hex(info_hash_20));
+                         info_hash.hex());
             return false;
         }
     }
@@ -852,26 +839,26 @@ bool DhtClient::lookup_should_finish(KademliaLookup& lookup,
 }
 
 std::vector<DhtClient::OutboundKrpc> DhtClient::advance_lookup(
-    const std::string& info_hash_20)
+    const InfoHash& info_hash)
 {
-    log_dht_debug("Advance lookup for " + bytes_to_hex(info_hash_20));
+    log_dht_debug("Advance lookup for " + info_hash.hex());
     std::vector<OutboundKrpc> outbound;
 
-    auto it = kademlia_lookups_.find(info_hash_20);
+    auto it = kademlia_lookups_.find(info_hash);
     if (it == kademlia_lookups_.end())
     {
         log_dht_info("advance_lookup: no active kademlia lookup for " +
-                     bytes_to_hex(info_hash_20));
+                     info_hash.hex());
         return outbound;
     }
 
     KademliaLookup& lookup = it->second;
 
-    if (lookup_should_finish(lookup, info_hash_20))
+    if (lookup_should_finish(lookup, info_hash))
     {
         kademlia_lookups_.erase(it);
         log_dht_info("advance_lookup: exhausted candidates for " +
-                     bytes_to_hex(info_hash_20));
+                     info_hash.hex());
         return outbound;
     }
 
@@ -879,7 +866,7 @@ std::vector<DhtClient::OutboundKrpc> DhtClient::advance_lookup(
     if (in_flight >= LOOKUP_ALPHA)
     {
         log_dht_info(
-            "advance_lookup: waiting hash=" + bytes_to_hex(info_hash_20) +
+            "advance_lookup: waiting hash=" + info_hash.hex() +
             " in_flight=" + std::to_string(in_flight) +
             " alpha=" + std::to_string(LOOKUP_ALPHA));
         return outbound;
@@ -891,22 +878,22 @@ std::vector<DhtClient::OutboundKrpc> DhtClient::advance_lookup(
     {
         const std::string txn = random_txn();
         lookup.add_pending_txn(txn);
-        pending_lookups_[txn] = {info_hash_20,
+        pending_lookups_[txn] = {info_hash,
                                  std::chrono::steady_clock::now()};
 
         outbound.push_back(
-            {make_get_peers(txn, self_id_, info_hash_20), node.pa});
+            {make_get_peers(txn, self_id_, info_hash), node.pa});
     }
 
-    if (outbound.empty() && lookup_should_finish(lookup, info_hash_20))
+    if (outbound.empty() && lookup_should_finish(lookup, info_hash))
     {
-        kademlia_lookups_.erase(info_hash_20);
+        kademlia_lookups_.erase(it);
         log_dht_info("advance_lookup: exhausted candidates for " +
-                     bytes_to_hex(info_hash_20));
+                     info_hash.hex());
     }
     else
     {
-        log_dht_info("advance_lookup: hash=" + bytes_to_hex(info_hash_20) +
+        log_dht_info("advance_lookup: hash=" + info_hash.hex() +
                      " sent=" + std::to_string(outbound.size()) +
                      " in_flight=" + std::to_string(lookup.pending_count()));
     }
@@ -915,13 +902,13 @@ std::vector<DhtClient::OutboundKrpc> DhtClient::advance_lookup(
 }
 
 void DhtClient::on_lookup_response(const KrpcMessage& msg,
-                                   const std::string& info_hash_20)
+                                   const InfoHash& info_hash)
 {
-    auto it = kademlia_lookups_.find(info_hash_20);
+    auto it = kademlia_lookups_.find(info_hash);
     if (it == kademlia_lookups_.end())
     {
         log_dht_info("on_lookup_response: no active kademlia lookup for " +
-                     bytes_to_hex(info_hash_20) + " txn=" + msg.txn);
+                     info_hash.hex() + " txn=" + msg.txn);
         return;
     }
 
@@ -932,22 +919,22 @@ void DhtClient::on_lookup_response(const KrpcMessage& msg,
     if (!msg.values.empty())
     {
         log_dht_info("on_lookup_response: peers found hash=" +
-                     bytes_to_hex(info_hash_20) +
+                     info_hash.hex() +
                      " peers=" + std::to_string(msg.values.size()));
-        finish_lookup(info_hash_20);
+        finish_lookup(info_hash);
         return;
     }
 
-    if (lookup_should_finish(lookup, info_hash_20))
+    if (lookup_should_finish(lookup, info_hash))
     {
         log_dht_info("on_lookup_response: lookup complete without peers hash=" +
-                     bytes_to_hex(info_hash_20));
-        finish_lookup(info_hash_20);
+                     info_hash.hex());
+        finish_lookup(info_hash);
         return;
     }
 
     log_dht_info(
-        "on_lookup_response: continuing hash=" + bytes_to_hex(info_hash_20) +
+        "on_lookup_response: continuing hash=" + info_hash.hex() +
         " nodes=" + std::to_string(msg.nodes.size()) +
         " pending=" + std::to_string(lookup.pending_count()));
 }
@@ -955,18 +942,10 @@ void DhtClient::on_lookup_response(const KrpcMessage& msg,
 void DhtClient::maintain_registered_torrents()
 {
     const auto now = std::chrono::steady_clock::now();
-    std::vector<std::string> to_refresh;
+    const std::vector<InfoHash> to_refresh =
+        announce_coordinator_.torrents_needing_refresh(now);
 
-    {
-        std::lock_guard<std::mutex> reg_lk(registered_mutex_);
-        for (const auto& [hash, reg] : registered_torrents_)
-        {
-            if (now - reg.last_refresh >= ANNOUNCE_REFRESH_INTERVAL)
-                to_refresh.push_back(hash);
-        }
-    }
-
-    for (const auto& hash : to_refresh)
+    for (const InfoHash& hash : to_refresh)
     {
         bool pending = false;
         {
@@ -992,53 +971,8 @@ void DhtClient::maintain_registered_torrents()
             continue;
 
         get_peers(hash);
-
-        std::lock_guard<std::mutex> reg_lk(registered_mutex_);
-        auto it = registered_torrents_.find(hash);
-        if (it != registered_torrents_.end())
-            it->second.last_refresh = now;
+        announce_coordinator_.mark_refreshed(hash, now);
     }
-}
-
-void DhtClient::maybe_announce_registered(const KrpcMessage& msg,
-                                          PeerAddress pa)
-{
-    if (msg.token.empty())
-        return;
-
-    std::string info_hash_20;
-    {
-        std::lock_guard<std::mutex> lk(peers_mutex_);
-        auto it = pending_lookups_.find(msg.txn);
-        if (it == pending_lookups_.end())
-            return;
-        info_hash_20 = it->second.first;
-    }
-
-    uint16_t listen_port = 0;
-    {
-        std::lock_guard<std::mutex> lk(registered_mutex_);
-        auto it = registered_torrents_.find(info_hash_20);
-        if (it == registered_torrents_.end())
-            return;
-        listen_port = it->second.listen_port;
-    }
-
-    announce_to_node(info_hash_20, listen_port, pa, msg.token);
-}
-
-void DhtClient::announce_to_node(const std::string& info_hash_20,
-                                 uint16_t listen_port,
-                                 PeerAddress pa,
-                                 const std::string& token)
-{
-    if (info_hash_20.size() != 20 || token.empty())
-        return;
-
-    std::string txn = random_txn();
-    send_krpc(make_announce_peer(
-                  txn, self_id_, info_hash_20, listen_port, token, true),
-              pa);
 }
 
 void DhtClient::refresh_buckets()
@@ -1075,34 +1009,6 @@ void DhtClient::refresh_buckets()
     }
 
     refresh_bucket_cursor_ = (start + to_refresh) % bucket_count;
-}
-
-// ---------------------------------------------------------------------------
-// Token management
-// ---------------------------------------------------------------------------
-
-std::string DhtClient::current_token() const
-{
-    std::lock_guard<std::mutex> lk(token_mutex_);
-    return current_token_;
-}
-
-bool DhtClient::verify_token(const std::string& token) const
-{
-    std::lock_guard<std::mutex> lk(token_mutex_);
-    return (token == current_token_ || token == prev_token_);
-}
-
-void DhtClient::rotate_token_if_needed()
-{
-    std::lock_guard<std::mutex> lk(token_mutex_);
-    auto now = std::chrono::steady_clock::now();
-    if (now - last_token_rotation_ >= TOKEN_ROTATE_INTERVAL)
-    {
-        prev_token_ = current_token_;
-        current_token_ = make_token_secret();
-        last_token_rotation_ = now;
-    }
 }
 
 }  // namespace dht

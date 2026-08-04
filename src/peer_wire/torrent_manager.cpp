@@ -466,10 +466,14 @@ void TorrentManager::add_dht_peer(const PeerAddress& peer)
     spawn_peers_locked();
 }
 
+const InfoHash& TorrentManager::info_hash() const
+{
+    return m_torrent->get_info_hash();
+}
+
 std::string TorrentManager::info_hash_str() const
 {
-    const auto& h = m_torrent->get_info_hash();
-    return std::string(reinterpret_cast<const char*>(h.data()), h.size());
+    return m_torrent->get_info_hash().to_raw();
 }
 
 std::string TorrentManager::info_hash_hex() const

@@ -45,11 +45,11 @@ std::string make_find_node(const std::string& txn,
 
 std::string make_get_peers(const std::string& txn,
                            const NodeId& self_id,
-                           const std::string& info_hash_20)
+                           const InfoHash& info_hash)
 {
     std::string args =
         bencode::dict({{"id", bencode::string(self_id.to_string())},
-                       {"info_hash", bencode::string(info_hash_20)}});
+                       {"info_hash", bencode::string(info_hash.to_raw())}});
     return bencode::dict({{"a", args},
                           {"q", bencode::string("get_peers")},
                           {"t", bencode::string(txn)},
@@ -58,7 +58,7 @@ std::string make_get_peers(const std::string& txn,
 
 std::string make_announce_peer(const std::string& txn,
                                const NodeId& self_id,
-                               const std::string& info_hash_20,
+                               const InfoHash& info_hash,
                                uint16_t port,
                                const std::string& token,
                                bool implied_port)
@@ -66,7 +66,7 @@ std::string make_announce_peer(const std::string& txn,
     std::map<std::string, std::string> a_map;
     a_map["id"] = bencode::string(self_id.to_string());
     a_map["implied_port"] = bencode::integer(implied_port ? 1 : 0);
-    a_map["info_hash"] = bencode::string(info_hash_20);
+    a_map["info_hash"] = bencode::string(info_hash.to_raw());
     a_map["port"] = bencode::integer(port);
     a_map["token"] = bencode::string(token);
     return bencode::dict({{"a", bencode::dict(a_map)},
@@ -276,12 +276,18 @@ std::optional<KrpcMessage> parse_krpc(const std::string& data)
             else if (q == "get_peers")
             {
                 msg.query_type = KrpcQuery::GetPeers;
-                msg.info_hash = bstring(a, "info_hash");
+                const auto ih = InfoHash::try_from_raw(bstring(a, "info_hash"));
+                if (!ih)
+                    return std::nullopt;
+                msg.info_hash = *ih;
             }
             else if (q == "announce_peer")
             {
                 msg.query_type = KrpcQuery::AnnouncePeer;
-                msg.info_hash = bstring(a, "info_hash");
+                const auto ih = InfoHash::try_from_raw(bstring(a, "info_hash"));
+                if (!ih)
+                    return std::nullopt;
+                msg.info_hash = *ih;
                 msg.token = bstring(a, "token");
                 msg.peer_port = static_cast<uint16_t>(binteger(a, "port"));
                 msg.implied_port = (binteger(a, "implied_port") != 0);
@@ -439,11 +445,15 @@ std::string format_krpc_summary(const KrpcMessage& msg)
                     break;
                 case KrpcQuery::GetPeers:
                     oss << " GET_PEERS info_hash="
-                        << bytes_hex_prefix(msg.info_hash);
+                        << (msg.info_hash
+                                ? msg.info_hash->hex().substr(0, 8) + "..."
+                                : "?");
                     break;
                 case KrpcQuery::AnnouncePeer:
                     oss << " ANNOUNCE_PEERS info_hash="
-                        << bytes_hex_prefix(msg.info_hash)
+                        << (msg.info_hash
+                                ? msg.info_hash->hex().substr(0, 8) + "..."
+                                : "?")
                         << " port=" << msg.peer_port
                         << (msg.implied_port ? " implied_port=1" : "");
                     break;

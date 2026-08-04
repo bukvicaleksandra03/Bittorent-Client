@@ -16,7 +16,7 @@ std::vector<uint8_t> Handshake::serialize() const
     buf.insert(
         buf.end(), PROTOCOL_STRING, PROTOCOL_STRING + PROTOCOL_STRING_LENGTH);
     buf.insert(buf.end(), reserved.begin(), reserved.end());
-    buf.insert(buf.end(), info_hash.begin(), info_hash.end());
+    buf.insert(buf.end(), info_hash.bytes.begin(), info_hash.bytes.end());
     buf.insert(buf.end(), peer_id.begin(), peer_id.end());
 
     return buf;
@@ -48,7 +48,14 @@ Handshake Handshake::deserialize(const uint8_t* data, size_t len)
     std::memcpy(hs.reserved.data(), data + offset, 8);
     offset += 8;
 
-    std::memcpy(hs.info_hash.data(), data + offset, 20);
+    const auto info_hash =
+        InfoHash::try_from_raw(std::string_view(
+            reinterpret_cast<const char*>(data + offset), 20));
+    if (!info_hash)
+    {
+        throw std::runtime_error("invalid info_hash length in handshake");
+    }
+    hs.info_hash = *info_hash;
     offset += 20;
 
     std::memcpy(hs.peer_id.data(), data + offset, 20);

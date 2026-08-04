@@ -9,6 +9,7 @@
 #include "dht/krpc.h"
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
+#include "info_hash.h"
 #include "peer_address.h"
 
 // ===========================================================================
@@ -86,7 +87,9 @@ TEST(Krpc, FindNode)
 TEST(Krpc, GetPeers)
 {
     dht::NodeId  self      = make_id("abcdefghij0123456789");
-    std::string  info_hash = "ihihihihihihihihihih";   // 20 bytes
+    InfoHash info_hash;
+    info_hash.bytes.fill(static_cast<uint8_t>('i'));
+    const std::string raw = info_hash.to_raw();
     std::string  msg       = dht::make_get_peers("cc", self, info_hash);
 
     bencode::Parser parser(msg, true);
@@ -103,7 +106,12 @@ TEST(Krpc, GetPeers)
     ASSERT_NE(a, nullptr);
     auto* ih = dynamic_cast<BString*>(a->content.at("info_hash").get());
     ASSERT_NE(ih, nullptr);
-    EXPECT_EQ(ih->content, info_hash);
+    EXPECT_EQ(ih->content, raw);
+
+    const auto parsed = dht::parse_krpc(msg);
+    ASSERT_TRUE(parsed.has_value());
+    ASSERT_TRUE(parsed->info_hash.has_value());
+    EXPECT_EQ(*parsed->info_hash, info_hash);
 }
 
 TEST(Krpc, AnnounceResponse)

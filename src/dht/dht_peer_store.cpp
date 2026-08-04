@@ -27,7 +27,7 @@ void DhtPeerStore::expire_stale()
     }
 }
 
-void DhtPeerStore::ensure_bucket(const std::string& info_hash)
+void DhtPeerStore::ensure_bucket(const InfoHash& info_hash)
 {
     std::lock_guard<std::mutex> lk(mutex_);
     if (buckets_.get(info_hash) != nullptr)
@@ -36,7 +36,7 @@ void DhtPeerStore::ensure_bucket(const std::string& info_hash)
     buckets_.put(info_hash, HashBucket{});
 }
 
-void DhtPeerStore::upsert(const std::string& info_hash, PeerAddress pa)
+void DhtPeerStore::upsert(const InfoHash& info_hash, PeerAddress pa)
 {
     std::lock_guard<std::mutex> lk(mutex_);
     const auto now = std::chrono::steady_clock::now();
@@ -51,7 +51,7 @@ void DhtPeerStore::upsert(const std::string& info_hash, PeerAddress pa)
     bucket->peers.put(pa, now);
 }
 
-std::vector<PeerAddress> DhtPeerStore::live_peers(const std::string& info_hash)
+std::vector<PeerAddress> DhtPeerStore::live_peers(const InfoHash& info_hash)
 {
     std::lock_guard<std::mutex> lk(mutex_);
     std::vector<PeerAddress> result;

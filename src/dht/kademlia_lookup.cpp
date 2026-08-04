@@ -5,10 +5,10 @@
 namespace dht
 {
 
-KademliaLookup::KademliaLookup(std::string info_hash_20,
+KademliaLookup::KademliaLookup(InfoHash info_hash,
                                std::vector<RoutingEntry> seed_candidates)
-    : info_hash_20_(std::move(info_hash_20)),
-      target_(NodeId::from_string(info_hash_20)),
+    : info_hash_(info_hash),
+      target_(NodeId::from_info_hash(info_hash)),
       candidates_(std::move(seed_candidates)),
       started_(std::chrono::steady_clock::now())
 {

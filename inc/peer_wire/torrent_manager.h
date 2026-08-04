@@ -59,8 +59,9 @@ class TorrentManager
     // Inject a DHT-discovered peer directly into the peer pool.
     void add_dht_peer(const PeerAddress& peer);
 
-    // Raw 20-byte info hash as std::string (for DhtClient::get_peers /
-    // announce).
+    const InfoHash& info_hash() const;
+
+    // Raw 20-byte info hash (for legacy string APIs).
     std::string info_hash_str() const;
 
     // Hex-encoded info hash (for matching DHT peer-callback info_hash_hex).

@@ -18,6 +18,7 @@
 #include "dht/dht_client.h"
 #include "dht/krpc.h"
 #include "dht/node_id.h"
+#include "info_hash.h"
 #include "net/socket.h"
 #include "net/socket_addresses.h"
 #include "peer_address.h"
@@ -63,8 +64,15 @@ std::string repeated_info_hash_hex(char byte)
     return hex;
 }
 
+InfoHash info_hash_from_byte(char byte)
+{
+    InfoHash h;
+    h.bytes.fill(static_cast<uint8_t>(byte));
+    return h;
+}
+
 bool seed_peer_on_server(uint16_t server_port,
-                         const std::string& info_hash_20,
+                         const InfoHash& info_hash,
                          const std::string& peer_ip,
                          uint16_t peer_port)
 {
@@ -74,7 +82,7 @@ bool seed_peer_on_server(uint16_t server_port,
     sock.bind(IPv4Address("0.0.0.0", 0));
 
     const std::string txn = dht::random_txn();
-    sock.sendto(dht::make_get_peers(txn, announcer_id, info_hash_20),
+    sock.sendto(dht::make_get_peers(txn, announcer_id, info_hash),
                 IPv4Address("127.0.0.1", server_port));
 
     std::string token;
@@ -94,7 +102,7 @@ bool seed_peer_on_server(uint16_t server_port,
 
     sock.sendto(dht::make_announce_peer(dht::random_txn(),
                                         announcer_id,
-                                        info_hash_20,
+                                        info_hash,
                                         peer_port,
                                         token,
                                         false),
@@ -128,7 +136,7 @@ TEST(DhtClient, GetPeersRoutesByTransactionId)
     const uint16_t server_port = static_cast<uint16_t>(next_loopback_port());
     const uint16_t peer_port = static_cast<uint16_t>(next_loopback_port());
 
-    const std::string info_hash(20, '\x42');
+    const InfoHash info_hash = info_hash_from_byte('\x42');
     const std::string expected_hex = repeated_info_hash_hex('\x42');
 
     dht::DhtClient server(server_port);
@@ -187,8 +195,8 @@ TEST(DhtClient, GetPeersSeparatesMultipleInfoHashes)
     const uint16_t peer_port_a = static_cast<uint16_t>(next_loopback_port());
     const uint16_t peer_port_b = static_cast<uint16_t>(next_loopback_port());
 
-    const std::string hash_a(20, '\x11');
-    const std::string hash_b(20, '\x22');
+    const InfoHash hash_a = info_hash_from_byte('\x11');
+    const InfoHash hash_b = info_hash_from_byte('\x22');
     const std::string hex_a = repeated_info_hash_hex('\x11');
     const std::string hex_b = repeated_info_hash_hex('\x22');
 

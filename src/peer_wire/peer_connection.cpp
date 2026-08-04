@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 
 PeerConnection::PeerConnection(PeerAddress peer,
-                               crypto::SHA1Hash info_hash,
+                               InfoHash info_hash,
                                utils::PeerId my_peer_id,
                                PieceManager& piece_manager,
                                std::shared_ptr<logger::Logger> lg)

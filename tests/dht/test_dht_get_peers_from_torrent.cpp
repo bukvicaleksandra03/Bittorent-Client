@@ -45,6 +45,7 @@
 
 #include "bencode/bencode_parser.h"
 #include "dht/dht_client.h"
+#include "info_hash.h"
 #include "logger.h"
 #include "peer_address.h"
 
@@ -63,12 +64,6 @@ std::string default_torrent_path()
     return (project_root() / "torrent_files" / "unparsed_torrents" /
             "linuxmint-22.2-cinnamon-64bit.iso.torrent")
         .string();
-}
-
-std::string info_hash_20(const TorrentFile& torrent)
-{
-    const auto& h = torrent.get_info_hash();
-    return std::string(reinterpret_cast<const char*>(h.data()), h.size());
 }
 
 bool wait_for_routing_table(dht::DhtClient& client,
@@ -113,7 +108,7 @@ std::chrono::seconds lookup_timeout_from_env(
     return std::chrono::seconds(seconds);
 }
 
-std::set<PeerEndpoint> discover_peers(const std::string& info_hash,
+std::set<PeerEndpoint> discover_peers(const InfoHash& info_hash,
                                       const std::string& torrent_name,
                                       std::chrono::seconds lookup_timeout,
                                       bool stop_on_first_peer,
@@ -230,8 +225,7 @@ TEST(DhtPeerDiscovery, GetPeersFromRealTorrent)
     ASSERT_NE(torrent, nullptr)
         << "torrent not found or invalid: " << torrent_path;
 
-    const std::string info_hash = info_hash_20(*torrent);
-    ASSERT_EQ(info_hash.size(), 20u);
+    const InfoHash info_hash = torrent->get_info_hash();
 
     const auto peers =
         discover_peers(info_hash,
@@ -269,8 +263,7 @@ TEST(DhtPeerDiscovery, GetPeersFromRealTorrentLong)
     ASSERT_NE(torrent, nullptr)
         << "torrent not found or invalid: " << torrent_path;
 
-    const std::string info_hash = info_hash_20(*torrent);
-    ASSERT_EQ(info_hash.size(), 20u);
+    const InfoHash info_hash = torrent->get_info_hash();
 
     const auto lookup_timeout =
         lookup_timeout_from_env(std::chrono::seconds(120));

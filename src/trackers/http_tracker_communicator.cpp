@@ -27,7 +27,7 @@ static std::string event_to_string(uint32_t event)
     }
 }
 
-static std::string build_query_string(const crypto::SHA1Hash& info_hash,
+static std::string build_query_string(const InfoHash& info_hash,
                                       const utils::PeerId& my_peer_id,
                                       uint64_t downloaded,
                                       uint64_t left,
@@ -36,7 +36,7 @@ static std::string build_query_string(const crypto::SHA1Hash& info_hash,
                                       uint16_t port)
 {
     std::ostringstream qs;
-    qs << "info_hash=" << crypto::url_encode(info_hash);
+    qs << "info_hash=" << info_hash.url_encoded();
     qs << "&peer_id=" << crypto::url_encode(my_peer_id);
     qs << "&port=" << port;
     qs << "&uploaded=" << uploaded;
@@ -182,7 +182,7 @@ static std::vector<PeerAddress> parse_tracker_response(
 
 std::vector<PeerAddress> HTTPTrackerCommunicator::announce(
     const TrackerDetails& tracker,
-    const crypto::SHA1Hash& info_hash,
+    const InfoHash& info_hash,
     const utils::PeerId& my_peer_id,
     uint64_t downloaded,
     uint64_t left,

@@ -10,6 +10,7 @@
 
 #include "bencode/bencode_types.h"
 #include "crypto.h"
+#include "info_hash.h"
 #include "trackers/tracker_details.h"
 namespace fs = std::filesystem;
 
@@ -50,7 +51,7 @@ class TorrentFile
     {
         return is_multifile;
     }
-    const crypto::SHA1Hash& get_info_hash() const
+    const InfoHash& get_info_hash() const
     {
         return info_hash;
     }
@@ -60,7 +61,7 @@ class TorrentFile
     }
     std::string get_info_hash_hex() const
     {
-        return crypto::to_hex(info_hash);
+        return info_hash.hex();
     }
 
     TrackerDetails get_tracker() const
@@ -120,8 +121,8 @@ class TorrentFile
         false;  // If true, clients must only use trackers (no DHT/PEX)
 
     // SHA-1 of the raw bencoded info dict (torrent identity)
-    crypto::SHA1Hash info_hash;
-    std::vector<std::array<uint8_t, 20>> pieces;  // SHA-1 hash for each piece
+    InfoHash info_hash;
+    std::vector<crypto::SHA1Hash> pieces;  // SHA-1 hash for each piece
 
     // created when details from "announce" are extracted
     TrackerDetails announce_tracker;
