@@ -52,11 +52,12 @@ namespace dht
 //                                              |
 //                         +--------------------+--------------------+
 //                         v                    v                    v
-//                   values found        nodes only           txn expired
+//                   values and/or       lookup_should_finish   txn expired
+//                   nodes merged        (Kademlia exhausted)   (TTL tick)
 //                         |                    |                    |
 //                         v                    v                    v
-//                  finish_lookup         advance_lookup      expire (tick)
-//                  peers -> store         more queries
+//                  advance_lookup         finish_lookup        expire (tick)
+//                  more queries           peers -> store
 class GetPeersLookupManager
 {
    public:

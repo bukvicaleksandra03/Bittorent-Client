@@ -351,15 +351,13 @@ void GetPeersLookupManager::on_lookup_response(const KrpcMessage& msg,
     if (!msg.values.empty())
     {
         log_info("on_lookup_response: peers found hash=" + info_hash.hex() +
-                 " peers=" + std::to_string(msg.values.size()));
-        finish_lookup(info_hash);
-        return;
+                 " peers=" + std::to_string(msg.values.size()) +
+                 " (continuing lookup)");
     }
 
     if (lookup_should_finish(lookup, info_hash))
     {
-        log_info("on_lookup_response: lookup complete without peers hash=" +
-                 info_hash.hex());
+        log_info("on_lookup_response: lookup complete hash=" + info_hash.hex());
         finish_lookup(info_hash);
         return;
     }
