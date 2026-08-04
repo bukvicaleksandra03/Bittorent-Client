@@ -9,13 +9,12 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 #include "dht/announce_coordinator.h"
 #include "info_hash.h"
 #include "dht/dht_peer_store.h"
-#include "dht/kademlia_lookup.h"
+#include "dht/get_peers_lookup_manager.h"
 #include "dht/krpc.h"
 #include "dht/token_secret_rotator.h"
 #include "dht/node_id.h"
@@ -140,34 +139,8 @@ class DhtClient
     // Refresh buckets that haven't been touched recently.
     void refresh_buckets();
 
-    // Drop get_peers transaction bindings that have expired.
-    void expire_pending_lookups();
-
-    // Drop stalled iterative get_peers lookups.
-    void expire_active_lookups();
-
-    // Expire stale get_peers txns and advance active lookups (recv tick).
-    void tick_get_peers_lookups();
-
     // Periodic get_peers + announce_peer for registered torrents.
     void maintain_registered_torrents();
-
-    struct OutboundKrpc
-    {
-        std::string msg;
-        PeerAddress pa;
-    };
-
-    void finish_lookup(const InfoHash& info_hash);
-
-    // True when every known candidate was queried, nothing is in flight, and
-    // merging the current routing-table closest set does not add new work.
-    bool lookup_should_finish(KademliaLookup& lookup, const InfoHash& info_hash);
-
-    // Send up to alpha parallel get_peers queries for an active lookup.
-    std::vector<OutboundKrpc> advance_lookup(const InfoHash& info_hash);
-
-    void on_lookup_response(const KrpcMessage& msg, const InfoHash& info_hash);
 
     void send_announce_requests(const std::vector<AnnounceRequest>& requests);
 
@@ -182,22 +155,11 @@ class DhtClient
     std::unique_ptr<UDPSocket> socket_;
 
     RoutingTable routing_table_;
+    GetPeersLookupManager lookup_manager_;
 
     DhtPeerStore peer_store_;
     TokenSecretRotator token_rotator_;
     AnnounceCoordinator announce_coordinator_;
-    // KRPC transaction id -> info_hash for in-flight get_peers lookups.
-    std::unordered_map<
-        std::string,
-        std::pair<InfoHash, std::chrono::steady_clock::time_point>>
-        pending_lookups_;
-
-    // One iterative Kademlia lookup per info hash.
-    std::unordered_map<InfoHash, KademliaLookup> kademlia_lookups_;
-
-    static constexpr size_t LOOKUP_ALPHA = 6;
-
-    mutable std::mutex peers_mutex_;
 
     std::atomic<bool> running_{false};
 

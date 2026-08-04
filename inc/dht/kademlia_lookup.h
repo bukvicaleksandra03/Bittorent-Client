@@ -26,9 +26,8 @@ namespace dht
 // This class only tracks the *shape* of one lookup (candidates, who's been
 // queried, which of its own transaction ids are still outstanding). It does
 // not perform network I/O and does not own transaction-id -> info_hash
-// routing: DhtClient still owns that (pending_lookups_) since a single flat
-// map is needed to route any inbound KRPC response to the right lookup,
-// regardless of which lookup it belongs to.
+// routing: GetPeersLookupManager owns pending_lookups_ and maps inbound
+// KRPC responses to the correct active KademliaLookup.
 // ---------------------------------------------------------------------------
 class KademliaLookup
 {
