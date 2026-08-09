@@ -48,11 +48,18 @@ class AnnounceCoordinator
     void mark_refreshed(InfoHash info_hash,
                         std::chrono::steady_clock::time_point now);
 
+    // Torrents registered before the routing table had nodes; retry get_peers
+    // once candidates exist.
+    std::vector<InfoHash> torrents_needing_initial_lookup() const;
+
+    void mark_initial_lookup_started(InfoHash info_hash);
+
    private:
     struct RegisteredTorrent
     {
         uint16_t listen_port;
         std::chrono::steady_clock::time_point last_refresh;
+        bool initial_lookup_pending{false};
     };
 
     mutable std::mutex mutex_;

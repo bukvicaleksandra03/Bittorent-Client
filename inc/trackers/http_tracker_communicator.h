@@ -18,4 +18,12 @@ class HTTPTrackerCommunicator : public TrackerCommunicator
                                uint64_t uploaded,
                                uint32_t event,
                                uint16_t port) override;
+
+    TrackerScrapeStats scrape(const TrackerDetails& tracker,
+                              const InfoHash& info_hash) override;
 };
+
+TrackerScrapeStats parse_http_scrape_response(const std::string& body,
+                                              const InfoHash& info_hash);
+
+TrackerDetails scrape_tracker_from_announce(const TrackerDetails& announce);

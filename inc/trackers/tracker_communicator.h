@@ -1,12 +1,14 @@
 #pragma once
 
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include "info_hash.h"
 #include "logger.h"
 #include "peer_address.h"
 #include "trackers/tracker_details.h"
+#include "trackers/tracker_scrape_stats.h"
 #include "utils.h"
 
 class TrackerCommunicator
@@ -27,6 +29,13 @@ class TrackerCommunicator
                                        uint64_t uploaded,
                                        uint32_t event,
                                        uint16_t port) = 0;
+
+    virtual TrackerScrapeStats scrape(const TrackerDetails& tracker,
+                                      const InfoHash& /*info_hash*/)
+    {
+        throw std::runtime_error("Scrape is not supported for " +
+                                 tracker.to_string());
+    }
 
    protected:
     std::shared_ptr<logger::Logger> m_logger;

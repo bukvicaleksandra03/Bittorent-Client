@@ -16,7 +16,7 @@
 #include "trackers/tracker_communicator.h"
 #include "utils.h"
 
-class PeerConnection;  // forward declaration — avoids a circular include
+class PeerConnection;
 
 class TorrentManager
 {
@@ -57,7 +57,11 @@ class TorrentManager
     const std::string& torrent_name() const;
 
     // Inject a DHT-discovered peer directly into the peer pool.
-    void add_dht_peer(const PeerAddress& peer);
+    // Returns true if the peer was new and added.
+    bool add_dht_peer(const PeerAddress& peer);
+
+    // Unique peers added via DHT (excludes tracker peers and duplicates).
+    size_t dht_peers_discovered() const;
 
     const InfoHash& info_hash() const;
 
@@ -89,7 +93,6 @@ class TorrentManager
     // top `n` entries.  Thread-safe.
     std::vector<PeerStat> top_upload_peers(size_t n) const;
 
-    const std::string& log_output_dir() const;
     logger::Level log_level() const;
 
    private:
@@ -101,7 +104,11 @@ class TorrentManager
         Stopped = 3,
     };
 
-    void announce(TrackerEvent event);
+    // Tracker announce; returns peer list (empty on failure or when not
+    // needed).
+    std::vector<PeerAddress> announce(TrackerEvent event);
+
+    void append_unique_peers(const std::vector<PeerAddress>& peers);
 
     void run_peer_worker(size_t peer_index);
     void on_peer_worker_finished();
@@ -141,6 +148,8 @@ class TorrentManager
     // survive peer churn.  Updated under m_spawn_mu in run_peer_worker.
     std::atomic<uint64_t> m_uploaded_bytes_retired{0};
     std::atomic<uint64_t> m_blocks_uploaded_retired{0};
+
+    std::atomic<size_t> m_dht_peers_discovered{0};
 
     std::atomic<uint64_t> m_peer_workers_started{0};
     std::atomic<uint64_t> m_peer_handshakes_ok{0};

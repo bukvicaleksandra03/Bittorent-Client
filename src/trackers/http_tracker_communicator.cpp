@@ -1,7 +1,10 @@
 #include "trackers/http_tracker_communicator.h"
 
+#include "trackers/tracker_scrape_stats.h"
+
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 #include "bencode/bencode_parser.h"
 #include "crypto.h"
@@ -180,38 +183,26 @@ static std::vector<PeerAddress> parse_tracker_response(
     return peers;
 }
 
-std::vector<PeerAddress> HTTPTrackerCommunicator::announce(
-    const TrackerDetails& tracker,
-    const InfoHash& info_hash,
-    const utils::PeerId& my_peer_id,
-    uint64_t downloaded,
-    uint64_t left,
-    uint64_t uploaded,
-    uint32_t event,
-    uint16_t port)
+static std::string send_http_tracker_get(const TrackerDetails& tracker,
+                                         const std::string& query_string,
+                                         logger::Logger* log)
 {
-    bool use_tls = (tracker.protocol == TrackerProtocol::HTTPS);
-
-    std::string query = build_query_string(info_hash, my_peer_id, downloaded,
-                                           left, uploaded, event, port);
-    std::string request = build_http_request(tracker, query);
-
-    logger::Logger* log = m_logger.get();
+    const std::string request = build_http_request(tracker, query_string);
 
     if (log)
     {
-        LLOG_INFO(*log, "HTTP announce to " + tracker.to_string());
         LLOG_DEBUG(*log, "Request:\n" + request);
     }
 
     auto addresses = dns_lookup(tracker.hostname,
-                                std::to_string(tracker.port), SOCK_STREAM);
+                              std::to_string(tracker.port), SOCK_STREAM);
 
     if (addresses.empty())
     {
         throw std::runtime_error("DNS lookup failed for " + tracker.hostname);
     }
 
+    const bool use_tls = (tracker.protocol == TrackerProtocol::HTTPS);
     constexpr int CONNECT_TIMEOUT_MS = 10000;
     constexpr int RECV_TIMEOUT_MS = 15000;
 
@@ -220,9 +211,12 @@ std::vector<PeerAddress> HTTPTrackerCommunicator::announce(
         try
         {
             if (log)
+            {
                 LLOG_DEBUG(*log, "Trying address: " + addr->identifier);
+            }
 
-            int domain = (addr->domain() == AF_INET6) ? AF_INET6 : AF_INET;
+            const int domain =
+                (addr->domain() == AF_INET6) ? AF_INET6 : AF_INET;
             TCPClientSocket tcp_sock(domain);
             tcp_sock.connect_with_timeout(*addr, CONNECT_TIMEOUT_MS);
 
@@ -243,39 +237,197 @@ std::vector<PeerAddress> HTTPTrackerCommunicator::announce(
             if (raw_response.empty())
             {
                 if (log)
+                {
                     LLOG_WARNING(*log, "Empty response from tracker");
+                }
                 continue;
             }
 
             if (log)
+            {
                 LLOG_DEBUG(*log,
                            "Received " +
                                std::to_string(raw_response.size()) +
                                " bytes from tracker");
+            }
 
             HttpResponse http_resp = parse_http_response(raw_response);
 
             if (http_resp.status_code != 200)
             {
                 if (log)
+                {
                     LLOG_WARNING(*log,
                                  "Tracker returned HTTP " +
                                      std::to_string(http_resp.status_code));
+                }
                 continue;
             }
 
-            return parse_tracker_response(http_resp.body, log);
+            return http_resp.body;
         }
         catch (const std::exception& e)
         {
             if (log)
+            {
                 LLOG_WARNING(*log, "Failed on address " + addr->identifier +
                                        ": " + e.what());
-            continue;
+            }
         }
     }
 
     throw std::runtime_error(
-        "HTTP announce failed: exhausted all addresses for " +
+        "HTTP tracker request failed: exhausted all addresses for " +
         tracker.hostname);
+}
+
+std::vector<PeerAddress> HTTPTrackerCommunicator::announce(
+    const TrackerDetails& tracker,
+    const InfoHash& info_hash,
+    const utils::PeerId& my_peer_id,
+    uint64_t downloaded,
+    uint64_t left,
+    uint64_t uploaded,
+    uint32_t event,
+    uint16_t port)
+{
+    const std::string query = build_query_string(
+        info_hash, my_peer_id, downloaded, left, uploaded, event, port);
+
+    if (m_logger)
+    {
+        LLOG_INFO(*m_logger, "HTTP announce to " + tracker.to_string());
+    }
+
+    const std::string body =
+        send_http_tracker_get(tracker, query, m_logger.get());
+
+    return parse_tracker_response(body, m_logger.get());
+}
+
+// ---------------------------------------------------------------------------
+// HTTP tracker scrape
+// ---------------------------------------------------------------------------
+
+static std::string build_scrape_query_string(const InfoHash& info_hash)
+{
+    std::ostringstream oss;
+    oss << "info_hash=" << info_hash.url_encoded();
+    return oss.str();
+}
+
+static std::string announce_path_to_scrape_path(const std::string& path)
+{
+    constexpr std::string_view announce_suffix = "/announce";
+    constexpr std::string_view scrape_suffix = "/scrape";
+
+    if (path.size() >= announce_suffix.size() &&
+        path.compare(path.size() - announce_suffix.size(),
+                     announce_suffix.size(), announce_suffix) == 0)
+    {
+        return path.substr(0, path.size() - announce_suffix.size()) +
+               std::string(scrape_suffix);
+    }
+
+    const auto pos = path.find("/announce");
+    if (pos != std::string::npos)
+    {
+        std::string result = path;
+        result.replace(pos, announce_suffix.size(), scrape_suffix);
+        return result;
+    }
+
+    if (path == "announce")
+    {
+        return "scrape";
+    }
+
+    return std::string(scrape_suffix);
+}
+
+TrackerDetails scrape_tracker_from_announce(const TrackerDetails& announce)
+{
+    TrackerDetails scrape = announce;
+    scrape.path = announce_path_to_scrape_path(announce.path);
+    return scrape;
+}
+
+TrackerScrapeStats parse_http_scrape_response(const std::string& body,
+                                              const InfoHash& info_hash)
+{
+    TrackerScrapeStats stats;
+
+    bencode::Parser parser(reinterpret_cast<const uint8_t*>(body.data()),
+                         body.size());
+    auto root = parser.parse_value();
+    BDict* dict = as<BDict>(root.get());
+
+    if (dict->has_key("failure reason"))
+    {
+        throw std::runtime_error("Tracker scrape failure: " +
+                                 dict->get_val<BString>("failure reason")
+                                     ->content);
+    }
+
+    if (!dict->has_key("files"))
+    {
+        return stats;
+    }
+
+    BDict* files = as<BDict>((*dict)["files"]);
+    const std::string hash_key = info_hash.to_raw();
+
+    if (!files->has_key(hash_key))
+    {
+        return stats;
+    }
+
+    BDict* file_stats = as<BDict>((*files)[hash_key]);
+
+    if (file_stats->has_key("complete"))
+    {
+        stats.complete =
+            static_cast<uint64_t>(file_stats->get_val<BInteger>("complete")
+                                      ->value);
+    }
+
+    if (file_stats->has_key("incomplete"))
+    {
+        stats.incomplete =
+            static_cast<uint64_t>(file_stats->get_val<BInteger>("incomplete")
+                                      ->value);
+    }
+
+    if (file_stats->has_key("downloaded"))
+    {
+        stats.downloaded =
+            static_cast<uint64_t>(file_stats->get_val<BInteger>("downloaded")
+                                      ->value);
+    }
+    else if (file_stats->has_key("download"))
+    {
+        stats.downloaded =
+            static_cast<uint64_t>(file_stats->get_val<BInteger>("download")
+                                      ->value);
+    }
+
+    return stats;
+}
+
+TrackerScrapeStats HTTPTrackerCommunicator::scrape(
+    const TrackerDetails& tracker, const InfoHash& info_hash)
+{
+    const TrackerDetails scrape_tracker = scrape_tracker_from_announce(tracker);
+    const std::string query = build_scrape_query_string(info_hash);
+
+    if (m_logger)
+    {
+        LLOG_INFO(*m_logger,
+                  "Scraping HTTP tracker: " + scrape_tracker.to_string());
+    }
+
+    const std::string body =
+        send_http_tracker_get(scrape_tracker, query, m_logger.get());
+
+    return parse_http_scrape_response(body, info_hash);
 }

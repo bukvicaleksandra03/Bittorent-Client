@@ -1,7 +1,6 @@
 #include "peer_wire/torrent_manager.h"
 
 #include <algorithm>
-#include <cctype>
 #include <exception>
 #include <filesystem>
 #include <stdexcept>
@@ -9,31 +8,7 @@
 
 #include "peer_wire/peer_connection.h"
 #include "trackers/tracker_communicator_factory.h"
-
-namespace
-{
-
-// Replace filesystem-unfriendly characters so the torrent name can be used
-// safely as part of a log file path on any OS.
-std::string sanitize_filename(const std::string& name)
-{
-    std::string out;
-    out.reserve(name.size());
-    for (unsigned char c : name)
-    {
-        if (std::isalnum(c) || c == '-' || c == '_' || c == '.')
-        {
-            out += static_cast<char>(c);
-        }
-        else
-        {
-            out += '_';
-        }
-    }
-    return out;
-}
-
-}  // namespace
+#include "utils.h"
 
 TorrentManager::TorrentManager(std::unique_ptr<TorrentFile> torrent,
                                const std::string& output_dir,
@@ -61,23 +36,18 @@ TorrentManager::TorrentManager(std::unique_ptr<TorrentFile> torrent,
     m_logger = std::make_shared<logger::Logger>();
     m_logger->set_level(log_level);
     // Clear any logs from a previous run so each run starts with a clean slate.
-    fs::path log_dir =
-        fs::path(log_output_dir) / sanitize_filename(m_torrent->get_name());
+    fs::path log_dir = fs::path(log_output_dir) /
+                       utils::sanitize_filename(m_torrent->get_name());
     if (fs::exists(log_dir))
     {
         fs::remove_all(log_dir);
     }
     fs::create_directories(log_dir);
     m_logger->set_file(
-        (log_dir / (sanitize_filename(m_torrent->get_name()) + ".log"))
+        (log_dir / (utils::sanitize_filename(m_torrent->get_name()) + ".log"))
             .string());
 
     m_piece_manager.set_logger(m_logger);
-}
-
-const std::string& TorrentManager::log_output_dir() const
-{
-    return m_log_output_dir;
 }
 
 logger::Level TorrentManager::log_level() const
@@ -98,41 +68,35 @@ void TorrentManager::start()
         create_communicator(m_torrent->get_tracker().protocol, m_logger);
 
     m_disk_writer.preallocate_files();
-    announce(TrackerEvent::Started);
 
-    std::vector<PeerAddress> peers =
-        m_tracker->announce(m_torrent->get_tracker(),
-                            m_torrent->get_info_hash(),
-                            m_peer_id,
-                            downloaded_bytes(),
-                            m_torrent->get_total_size() - downloaded_bytes(),
-                            0,
-                            static_cast<uint32_t>(TrackerEvent::None),
-                            m_port);
-
-    if (peers.empty())
-    {
-        LLOG_WARNING(*m_logger, "tracker returned no peers");
-        return;
-    }
-    else
-    {
-        LLOG_INFO(
-            *m_logger,
-            "tracker returned " + std::to_string(peers.size()) + " peer(s):");
-        for (size_t i = 0; i < peers.size(); ++i)
-        {
-            LLOG_INFO(*m_logger,
-                      "  [" + std::to_string(i) + "] " + peers[i].to_string());
-        }
-    }
+    const std::vector<PeerAddress> tracker_peers =
+        announce(TrackerEvent::Started);
 
     {
         std::lock_guard<std::mutex> lock(m_spawn_mu);
-        m_all_peers = std::move(peers);
-        m_next_peer_index = 0;
-        m_workers_running = 0;
-        spawn_peers_locked();
+        if (!tracker_peers.empty())
+        {
+            LLOG_INFO(*m_logger,
+                      "tracker returned " +
+                          std::to_string(tracker_peers.size()) + " peer(s):");
+            for (size_t i = 0; i < tracker_peers.size(); ++i)
+            {
+                LLOG_INFO(*m_logger,
+                          "  [" + std::to_string(i) + "] " +
+                              tracker_peers[i].to_string());
+            }
+            append_unique_peers(tracker_peers);
+        }
+        else if (m_all_peers.empty())
+        {
+            LLOG_WARNING(*m_logger,
+                         "tracker returned no peers; continuing with DHT only");
+        }
+
+        if (!m_all_peers.empty())
+        {
+            spawn_peers_locked();
+        }
     }
 }
 
@@ -167,7 +131,8 @@ void TorrentManager::run_peer_worker(size_t peer_index)
     peer_logger->set_level(m_logger->get_level());
     peer_logger->set_prefix("[" + peer.to_string() + "] ");
     peer_logger->set_file(
-        (fs::path(m_log_output_dir) / sanitize_filename(m_torrent->get_name()) /
+        (fs::path(m_log_output_dir) /
+         utils::sanitize_filename(m_torrent->get_name()) /
          ("peer_" + peer.ip + "_" + std::to_string(peer.port) + ".log"))
             .string());
 
@@ -415,11 +380,11 @@ uint64_t TorrentManager::peer_run_failed() const
     return m_peer_run_failed.load(std::memory_order_relaxed);
 }
 
-void TorrentManager::announce(TrackerEvent event)
+std::vector<PeerAddress> TorrentManager::announce(TrackerEvent event)
 {
     if (!m_tracker)
     {
-        return;
+        return {};
     }
 
     const uint64_t downloaded = m_piece_manager.downloaded_bytes();
@@ -428,14 +393,14 @@ void TorrentManager::announce(TrackerEvent event)
 
     try
     {
-        (void)m_tracker->announce(m_torrent->get_tracker(),
-                                  m_torrent->get_info_hash(),
-                                  m_peer_id,
-                                  downloaded,
-                                  left,
-                                  0,
-                                  static_cast<uint32_t>(event),
-                                  m_port);
+        return m_tracker->announce(m_torrent->get_tracker(),
+                                   m_torrent->get_info_hash(),
+                                   m_peer_id,
+                                   downloaded,
+                                   left,
+                                   0,
+                                   static_cast<uint32_t>(event),
+                                   m_port);
     }
     catch (const std::exception& e)
     {
@@ -443,6 +408,19 @@ void TorrentManager::announce(TrackerEvent event)
                      "tracker announce failed (event=" +
                          std::to_string(static_cast<uint32_t>(event)) +
                          "): " + e.what());
+        return {};
+    }
+}
+
+void TorrentManager::append_unique_peers(const std::vector<PeerAddress>& peers)
+{
+    for (const PeerAddress& peer : peers)
+    {
+        const auto it = std::find(m_all_peers.begin(), m_all_peers.end(), peer);
+        if (it == m_all_peers.end())
+        {
+            m_all_peers.push_back(peer);
+        }
     }
 }
 
@@ -451,19 +429,26 @@ const std::string& TorrentManager::torrent_name() const
     return m_torrent->get_name();
 }
 
-void TorrentManager::add_dht_peer(const PeerAddress& peer)
+size_t TorrentManager::dht_peers_discovered() const
+{
+    return m_dht_peers_discovered.load();
+}
+
+bool TorrentManager::add_dht_peer(const PeerAddress& peer)
 {
     std::lock_guard<std::mutex> lock(m_spawn_mu);
-    // Skip duplicates already in the pool.
-    for (const auto& p : m_all_peers)
+    const size_t before = m_all_peers.size();
+    append_unique_peers({peer});
+    if (m_all_peers.size() == before)
     {
-        if (p.ip == peer.ip && p.port == peer.port)
-        {
-            return;
-        }
+        return false;
     }
-    m_all_peers.push_back(peer);
+    const size_t total = m_dht_peers_discovered.fetch_add(1) + 1;
+    LLOG_INFO(*m_logger,
+              "DHT discovered new peer: " + peer.to_string() +
+                  " (total DHT peers: " + std::to_string(total) + ")");
     spawn_peers_locked();
+    return true;
 }
 
 const InfoHash& TorrentManager::info_hash() const

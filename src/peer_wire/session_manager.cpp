@@ -1,11 +1,9 @@
 #include "peer_wire/session_manager.h"
 
 #include <algorithm>
-#include <iomanip>
-#include <iostream>
-#include <thread>
-
 #include <filesystem>
+#include <iomanip>
+#include <thread>
 
 #include "dht/dht_client.h"
 #include "peer_address.h"
@@ -24,6 +22,27 @@ constexpr const char k_clear_screen[] = "\033[2J\033[H";
 SessionManager::SessionManager(uint16_t listen_port)
     : m_listen_port(listen_port)
 {
+    init_session_logger();
+}
+
+void SessionManager::init_session_logger()
+{
+    if (m_session_logger)
+    {
+        return;
+    }
+
+    const std::string log_dir = "logs";
+    fs::create_directories(log_dir);
+    const fs::path log_path = fs::path(log_dir) / "session_manager.log";
+    if (fs::exists(log_path))
+    {
+        fs::remove(log_path);
+    }
+
+    m_session_logger = std::make_shared<logger::Logger>();
+    m_session_logger->set_level(logger::Level::INFO);
+    m_session_logger->set_file(log_path.string());
 }
 
 SessionManager::~SessionManager()
@@ -39,15 +58,13 @@ void SessionManager::add(std::unique_ptr<TorrentManager> manager)
         return;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_log_output_dir.empty())
-    {
-        m_log_output_dir = manager->log_output_dir();
-    }
     m_sessions.push_back(std::move(manager));
 }
 
 void SessionManager::start_all()
 {
+    init_session_logger();
+
     // Attempt a single UPnP port mapping for the shared listen port.
     // Best-effort: we continue even if it fails (outbound connections still
     // function without an open inbound mapping).
@@ -56,16 +73,18 @@ void SessionManager::start_all()
         m_upnp_mapping = UPnPPortMapping::create(m_listen_port);
         if (m_upnp_mapping)
         {
-            std::cout << "[SessionManager] UPnP: mapped port "
-                      << m_upnp_mapping->external_port() << " -> "
-                      << m_listen_port
-                      << " (external IP: " << m_upnp_mapping->external_ip()
-                      << ")\n";
+            LLOG_INFO(*m_session_logger,
+                      "UPnP: mapped port " +
+                          std::to_string(m_upnp_mapping->external_port()) +
+                          " -> " + std::to_string(m_listen_port) +
+                          " (external IP: " + m_upnp_mapping->external_ip() +
+                          ")");
         }
         else
         {
-            std::cout << "[SessionManager] UPnP: no gateway or mapping failed"
-                         " – continuing without port mapping\n";
+            LLOG_INFO(*m_session_logger,
+                      "UPnP: no gateway or mapping failed – continuing without "
+                      "port mapping");
         }
     }
 
@@ -83,28 +102,30 @@ void SessionManager::start_all()
                 std::lock_guard<std::mutex> lock(m_mutex);
                 for (auto& s : m_sessions)
                 {
-                    if (s && s->info_hash_hex() == info_hash_hex)
-                        s->add_dht_peer(pa);
+                    if (!s || s->info_hash_hex() != info_hash_hex)
+                    {
+                        continue;
+                    }
+                    const bool added = s->add_dht_peer(pa);
+                    LLOG_INFO(*m_session_logger,
+                              "DHT peer " + pa.to_string() +
+                                  " routed to torrent \"" +
+                                  s->torrent_name() + "\" (" +
+                                  info_hash_hex + ")" +
+                                  (added ? " (added)" :
+                                           " (duplicate, not added)"));
                 }
             });
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            const std::string log_dir =
-                m_log_output_dir.empty() ? "logs" : m_log_output_dir;
-            fs::create_directories(log_dir);
-            const fs::path dht_log_path = fs::path(log_dir) / "dht.log";
+            const fs::path dht_log_path = fs::path("logs") / "dht.log";
             if (fs::exists(dht_log_path))
             {
                 fs::remove(dht_log_path);
             }
 
-            logger::Level level = logger::Level::DEBUG;
-            if (!m_sessions.empty() && m_sessions.front())
-            {
-                level = m_sessions.front()->log_level();
-            }
-
+            logger::Level level = logger::Level::INFO;
             m_dht_logger = std::make_shared<logger::Logger>();
             m_dht_logger->set_level(level);
             m_dht_logger->set_file(dht_log_path.string());
@@ -112,8 +133,9 @@ void SessionManager::start_all()
         }
 
         m_dht_client->start();
-        std::cout << "[SessionManager] DHT: started on port " << m_listen_port
-                  << " (node id: " << m_dht_client->self_id().hex() << ")\n";
+        LLOG_INFO(*m_session_logger,
+                  "DHT: started on port " + std::to_string(m_listen_port) +
+                      " (node id: " + m_dht_client->self_id().hex() + ")");
     }
 
     // Register active torrents for periodic DHT get_peers + announce_peer.
@@ -258,6 +280,8 @@ void SessionManager::print_status_locked(std::ostream& os) const
            << s->progress() << "%  " << std::setw(24) << std::left << size_info
            << "  " << std::setw(14) << std::left << speed_str << "  "
            << state_str << "\n";
+
+        os << "    DHT peers discovered: " << s->dht_peers_discovered() << "\n";
 
         // While seeding, show what we have served: total uploaded, the number
         // of blocks/pieces served, and the current upload rate.

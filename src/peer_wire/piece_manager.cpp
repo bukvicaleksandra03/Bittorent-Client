@@ -34,7 +34,7 @@ PieceManager::PieceManager(uint32_t num_pieces,
 // Multiple peer threads can call this simultaneously; the CAS guarantees
 // exactly one thread wins each piece.
 // ---------------------------------------------------------------------------
-std::optional<uint32_t> PieceManager::next_needed(
+std::optional<NeededPiece> PieceManager::next_needed(
     const std::vector<bool>& peer_bitfield)
 {
     for (uint32_t i = 0; i < m_num_pieces; ++i)
@@ -60,10 +60,26 @@ std::optional<uint32_t> PieceManager::next_needed(
                                                  std::memory_order_acq_rel,
                                                  std::memory_order_relaxed))
         {
-            // We own piece i.  The caller will allocate the buffer locally.
-            return i;
+            return NeededPiece{i, true};
         }
         // Another thread claimed it; keep searching.
+    }
+
+    // Endgame: every incomplete piece is already claimed by some peer, but
+    // that peer may be slow or stalled.  Allow multiple peers to request the
+    // same remaining piece without taking an exclusive claim.
+    for (uint32_t i = 0; i < m_num_pieces; ++i)
+    {
+        if (i >= static_cast<uint32_t>(peer_bitfield.size()) ||
+            !peer_bitfield[i])
+        {
+            continue;
+        }
+        if (m_have[i].load(std::memory_order_acquire))
+        {
+            continue;
+        }
+        return NeededPiece{i, false};
     }
     return std::nullopt;
 }
@@ -102,28 +118,37 @@ bool PieceManager::complete_piece(uint32_t piece_index,
             ", num_pieces=" + std::to_string(m_num_pieces));
     }
 
-    // SHA-1 verification happens with no shared state touched.
+    if (m_have[piece_index].load(std::memory_order_acquire))
+    {
+        return true;
+    }
+
     crypto::SHA1Hash actual = crypto::sha1(data);
     if (actual != m_piece_hashes[piece_index])
     {
+        if (m_have[piece_index].load(std::memory_order_acquire))
+        {
+            return true;
+        }
         if (m_logger)
+        {
             LLOG_WARNING(
                 *m_logger,
                 "piece " + std::to_string(piece_index) +
-                    " failed SHA-1 verification; releasing claim for retry");
-
-        // Release the claim so another peer can re-download this piece.
-        m_claimed[piece_index].store(false, std::memory_order_release);
+                    " failed SHA-1 verification");
+        }
         return false;
     }
 
-    // Write to disk before marking the piece as available.
+    bool expected_have = false;
+    if (!m_have[piece_index].compare_exchange_strong(
+            expected_have, true, std::memory_order_acq_rel, std::memory_order_acquire))
+    {
+        return true;
+    }
+
     m_disk_writer.write_piece(piece_index, data);
 
-    // Mark the piece permanently done.  Leave m_claimed[piece_index] = true
-    // so next_needed never tries to re-claim an already-complete piece (even
-    // in the brief window before m_have is visible).
-    m_have[piece_index].store(true, std::memory_order_release);
     m_curr_downloaded_bytes.fetch_add(piece_length(piece_index),
                                       std::memory_order_relaxed);
     m_completed_count.fetch_add(1, std::memory_order_acq_rel);

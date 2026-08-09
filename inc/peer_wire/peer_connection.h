@@ -165,4 +165,6 @@ class PeerConnection
     // verification and disk write, after which we claim the next piece.
     // nullopt means no piece is currently claimed from this peer.
     std::optional<InFlightPiece> m_current_piece;
+    // True when m_current_piece was obtained via exclusive CAS in next_needed.
+    bool m_current_piece_exclusive = false;
 };

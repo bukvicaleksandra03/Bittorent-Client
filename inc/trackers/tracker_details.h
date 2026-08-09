@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "trackers/tracker_protocol.h"
 
 struct TrackerDetails

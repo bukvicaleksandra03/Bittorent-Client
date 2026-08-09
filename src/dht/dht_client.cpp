@@ -144,6 +144,18 @@ size_t DhtClient::routing_table_size() const
     return routing_table_.size();
 }
 
+size_t DhtClient::live_peer_count(const InfoHash& info_hash) const
+{
+    return const_cast<DhtPeerStore&>(peer_store_).live_peers(info_hash).size();
+}
+
+void DhtClient::log_get_peers_lookup_completed(
+    const InfoHash& info_hash) const
+{
+    log_dht_info("get_peers lookup completed for " + info_hash.hex() + ": " +
+                 std::to_string(live_peer_count(info_hash)) + " live peer(s)");
+}
+
 void DhtClient::set_dht_logger(std::shared_ptr<logger::Logger> logger)
 {
     std::lock_guard<std::mutex> lk(dht_logger_mutex_);
@@ -225,8 +237,13 @@ void DhtClient::get_peers(const InfoHash& info_hash)
     if (result.no_candidates)
         return;
 
+    announce_coordinator_.mark_initial_lookup_started(info_hash);
+
     for (const auto& o : result.outbound)
         send_krpc(o.msg, o.pa);
+
+    if (result.lookup_completed)
+        log_get_peers_lookup_completed(info_hash);
 }
 
 void DhtClient::ping(PeerAddress pa)
@@ -495,7 +512,12 @@ void DhtClient::on_response(const KrpcMessage& msg, PeerAddress pa)
     for (const auto& o : lookup_result.outbound)
         send_krpc(o.msg, o.pa);
 
+    if (lookup_result.lookup_completed && lookup_hash)
+        log_get_peers_lookup_completed(*lookup_hash);
+
     send_announce_requests(announce_requests);
+
+    try_pending_initial_lookups();
 }
 
 // ---------------------------------------------------------------------------
@@ -597,8 +619,25 @@ void DhtClient::maintenance_loop()
     }
 }
 
+void DhtClient::try_pending_initial_lookups()
+{
+    if (routing_table_size() == 0)
+        return;
+
+    for (const InfoHash& hash :
+         announce_coordinator_.torrents_needing_initial_lookup())
+    {
+        if (lookup_manager_.has_pending_lookup(hash))
+            continue;
+
+        get_peers(hash);
+    }
+}
+
 void DhtClient::maintain_registered_torrents()
 {
+    try_pending_initial_lookups();
+
     const auto now = std::chrono::steady_clock::now();
     const std::vector<InfoHash> to_refresh =
         announce_coordinator_.torrents_needing_refresh(now);

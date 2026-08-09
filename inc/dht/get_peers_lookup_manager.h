@@ -74,6 +74,7 @@ class GetPeersLookupManager
         bool skipped_pending = false;
         bool cleared_exhausted = false;
         bool no_candidates = false;
+        bool lookup_completed = false;
     };
 
     struct ResponseResult
@@ -81,6 +82,13 @@ class GetPeersLookupManager
         bool txn_known = false;
         std::optional<InfoHash> info_hash;
         std::vector<OutboundKrpc> outbound;
+        bool lookup_completed = false;
+    };
+
+    struct AdvanceResult
+    {
+        std::vector<OutboundKrpc> outbound;
+        bool lookup_completed = false;
     };
 
     GetPeersLookupManager(RoutingTable& routing_table, NodeId self_id);
@@ -112,7 +120,7 @@ class GetPeersLookupManager
     bool lookup_should_finish(KademliaLookup& lookup,
                               const InfoHash& info_hash);
 
-    std::vector<OutboundKrpc> advance_lookup(const InfoHash& info_hash);
+    AdvanceResult advance_lookup(const InfoHash& info_hash);
 
     void on_lookup_response(const KrpcMessage& msg, const InfoHash& info_hash);
 

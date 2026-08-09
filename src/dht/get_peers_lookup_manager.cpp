@@ -58,12 +58,15 @@ GetPeersLookupManager::StartResult GetPeersLookupManager::start_or_advance(
             }
             else if (lookup_should_finish(it->second, info_hash))
             {
-                kademlia_lookups_.erase(it);
+                finish_lookup(info_hash);
                 result.cleared_exhausted = true;
+                result.lookup_completed = true;
             }
             else
             {
-                result.outbound = advance_lookup(info_hash);
+                AdvanceResult adv = advance_lookup(info_hash);
+                result.outbound = std::move(adv.outbound);
+                result.lookup_completed = adv.lookup_completed;
             }
         }
 
@@ -72,7 +75,9 @@ GetPeersLookupManager::StartResult GetPeersLookupManager::start_or_advance(
             kademlia_lookups_.emplace(
                 info_hash, KademliaLookup(info_hash, std::move(closest)));
             result.started_new = true;
-            result.outbound = advance_lookup(info_hash);
+            AdvanceResult adv = advance_lookup(info_hash);
+            result.outbound = std::move(adv.outbound);
+            result.lookup_completed = adv.lookup_completed;
         }
     }
 
@@ -117,7 +122,15 @@ GetPeersLookupManager::ResponseResult GetPeersLookupManager::on_response(
     {
         on_lookup_response(msg, *result.info_hash);
         if (kademlia_lookups_.count(*result.info_hash))
-            result.outbound = advance_lookup(*result.info_hash);
+        {
+            AdvanceResult adv = advance_lookup(*result.info_hash);
+            result.outbound = std::move(adv.outbound);
+            result.lookup_completed = adv.lookup_completed;
+        }
+        else
+        {
+            result.lookup_completed = true;
+        }
     }
 
     pending_lookups_.erase(pit);
@@ -168,15 +181,15 @@ std::vector<GetPeersLookupManager::OutboundKrpc> GetPeersLookupManager::tick()
 
         for (const InfoHash& hash : hashes)
         {
-            auto batch = advance_lookup(hash);
+            AdvanceResult adv = advance_lookup(hash);
             outbound.insert(outbound.end(),
-                            std::make_move_iterator(batch.begin()),
-                            std::make_move_iterator(batch.end()));
+                            std::make_move_iterator(adv.outbound.begin()),
+                            std::make_move_iterator(adv.outbound.end()));
         }
     }
 
-    log_info("tick_get_peers_lookups: active=" + std::to_string(active_count) +
-             " outbound=" + std::to_string(outbound.size()));
+    log_debug("tick_get_peers_lookups: active=" + std::to_string(active_count) +
+              " outbound=" + std::to_string(outbound.size()));
 
     return outbound;
 }
@@ -202,8 +215,8 @@ void GetPeersLookupManager::expire_pending_lookups_locked()
             ++it;
         }
     }
-    log_info("expire_pending_lookups: expired " + std::to_string(expired) +
-             " pending get_peers transaction(s)");
+    log_debug("expire_pending_lookups: expired " + std::to_string(expired) +
+              " pending get_peers transaction(s)");
 }
 
 void GetPeersLookupManager::expire_active_lookups_locked()
@@ -275,27 +288,28 @@ bool GetPeersLookupManager::lookup_should_finish(KademliaLookup& lookup,
     return true;
 }
 
-std::vector<GetPeersLookupManager::OutboundKrpc>
+GetPeersLookupManager::AdvanceResult
 GetPeersLookupManager::advance_lookup(const InfoHash& info_hash)
 {
     log_debug("Advance lookup for " + info_hash.hex());
-    std::vector<OutboundKrpc> outbound;
+    AdvanceResult result;
 
     auto it = kademlia_lookups_.find(info_hash);
     if (it == kademlia_lookups_.end())
     {
         log_info("advance_lookup: no active kademlia lookup for " +
                  info_hash.hex());
-        return outbound;
+        return result;
     }
 
     KademliaLookup& lookup = it->second;
 
     if (lookup_should_finish(lookup, info_hash))
     {
-        kademlia_lookups_.erase(it);
+        finish_lookup(info_hash);
+        result.lookup_completed = true;
         log_info("advance_lookup: exhausted candidates for " + info_hash.hex());
-        return outbound;
+        return result;
     }
 
     const size_t in_flight = lookup.pending_count();
@@ -304,7 +318,7 @@ GetPeersLookupManager::advance_lookup(const InfoHash& info_hash)
         log_info("advance_lookup: waiting hash=" + info_hash.hex() +
                  " in_flight=" + std::to_string(in_flight) +
                  " alpha=" + std::to_string(LOOKUP_ALPHA));
-        return outbound;
+        return result;
     }
 
     const size_t can_send = LOOKUP_ALPHA - in_flight;
@@ -315,22 +329,24 @@ GetPeersLookupManager::advance_lookup(const InfoHash& info_hash)
         lookup.add_pending_txn(txn);
         pending_lookups_[txn] = {info_hash, std::chrono::steady_clock::now()};
 
-        outbound.push_back({make_get_peers(txn, self_id_, info_hash), node.pa});
+        result.outbound.push_back(
+            {make_get_peers(txn, self_id_, info_hash), node.pa});
     }
 
-    if (outbound.empty() && lookup_should_finish(lookup, info_hash))
+    if (result.outbound.empty() && lookup_should_finish(lookup, info_hash))
     {
-        kademlia_lookups_.erase(it);
+        finish_lookup(info_hash);
+        result.lookup_completed = true;
         log_info("advance_lookup: exhausted candidates for " + info_hash.hex());
     }
     else
     {
         log_info("advance_lookup: hash=" + info_hash.hex() +
-                 " sent=" + std::to_string(outbound.size()) +
+                 " sent=" + std::to_string(result.outbound.size()) +
                  " in_flight=" + std::to_string(lookup.pending_count()));
     }
 
-    return outbound;
+    return result;
 }
 
 void GetPeersLookupManager::on_lookup_response(const KrpcMessage& msg,

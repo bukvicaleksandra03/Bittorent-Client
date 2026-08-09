@@ -69,6 +69,11 @@ class TorrentFile
         return announce_tracker;
     }
 
+    const std::vector<std::vector<TrackerDetails>>& get_announce_list() const
+    {
+        return announce_list_trackers;
+    }
+
     // Returns the logical output file layout as (relative_path, length) pairs.
     // For single-file torrents this contains exactly one entry.
     std::vector<std::pair<fs::path, uint64_t>> file_layout() const

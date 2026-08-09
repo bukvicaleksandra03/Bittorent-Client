@@ -28,7 +28,6 @@ fi
 
 echo "Using torrent: ${TORRENT_PATH}"
 
-make clean
 make test_single_torrent
 
 env TORRENT_PATH="${TORRENT_PATH}" RUN_SINGLE_TORRENT_TEST=1 \

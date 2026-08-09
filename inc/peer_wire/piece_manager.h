@@ -13,6 +13,14 @@ class DiskWriter;
 
 inline constexpr uint32_t BLOCK_SIZE = 1 << 14;  // 16 KiB
 
+// Result of next_needed(): which piece to download and whether this peer
+// exclusively claimed it (must abort_piece on failure/disconnect).
+struct NeededPiece
+{
+    uint32_t index = 0;
+    bool exclusive = false;
+};
+
 // ---------------------------------------------------------------------------
 // PieceManager — lock-free coordination layer
 //
@@ -48,9 +56,12 @@ class PieceManager
                  DiskWriter& disk_writer);
 
     // Pick the next piece this peer has that we still need.
-    // Atomically claims the piece via CAS; concurrent calls are safe.
-    // Returns std::nullopt when all pieces are claimed or complete.
-    std::optional<uint32_t> next_needed(const std::vector<bool>& peer_bitfield);
+    // Normally atomically claims the piece via CAS (exclusive=true).
+    // When every remaining piece is already claimed, enters endgame mode and
+    // returns an incomplete piece without claiming (exclusive=false) so
+    // multiple peers can request the same last piece(s).
+    std::optional<NeededPiece> next_needed(
+        const std::vector<bool>& peer_bitfield);
 
     // Byte length of a given piece (last piece may be shorter).
     uint32_t piece_length(uint32_t index) const;
@@ -59,8 +70,9 @@ class PieceManager
 
     // Called by the owning peer thread after assembling all blocks locally.
     // Verifies SHA-1, writes to disk, and marks the piece complete.
-    // Returns true on success; on hash failure releases the claim and returns
-    // false so the piece can be re-downloaded.
+    // Returns true on success or if another peer already completed the piece
+    // (endgame race). On hash failure returns false; the caller must call
+    // abort_piece only when it holds an exclusive claim.
     bool complete_piece(uint32_t piece_index, const std::vector<uint8_t>& data);
 
     // True once every piece has been successfully completed.

@@ -13,8 +13,8 @@ static constexpr auto kAnnounceRefreshInterval = std::chrono::minutes(12);
 void AnnounceCoordinator::register_torrent(InfoHash info_hash, uint16_t port)
 {
     std::lock_guard<std::mutex> lk(mutex_);
-    registered_[info_hash] =
-        RegisteredTorrent{port, std::chrono::steady_clock::now()};
+    registered_[info_hash] = RegisteredTorrent{
+        port, std::chrono::steady_clock::now(), true};
 }
 
 void AnnounceCoordinator::unregister_torrent(InfoHash info_hash)
@@ -81,6 +81,27 @@ void AnnounceCoordinator::mark_refreshed(
     auto it = registered_.find(info_hash);
     if (it != registered_.end())
         it->second.last_refresh = now;
+}
+
+std::vector<InfoHash> AnnounceCoordinator::torrents_needing_initial_lookup()
+    const
+{
+    std::vector<InfoHash> pending;
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const auto& [hash, reg] : registered_)
+    {
+        if (reg.initial_lookup_pending)
+            pending.push_back(hash);
+    }
+    return pending;
+}
+
+void AnnounceCoordinator::mark_initial_lookup_started(InfoHash info_hash)
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    auto it = registered_.find(info_hash);
+    if (it != registered_.end())
+        it->second.initial_lookup_pending = false;
 }
 
 }  // namespace dht

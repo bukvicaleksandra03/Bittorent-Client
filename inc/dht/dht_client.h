@@ -99,6 +99,9 @@ class DhtClient
     // Number of nodes currently in the routing table.
     size_t routing_table_size() const;
 
+    // Non-expired peers stored for info_hash (from DHT get_peers responses).
+    size_t live_peer_count(const InfoHash& info_hash) const;
+
     // Shared DHT file logger
     void set_dht_logger(std::shared_ptr<logger::Logger> logger);
 
@@ -142,10 +145,14 @@ class DhtClient
     // Periodic get_peers + announce_peer for registered torrents.
     void maintain_registered_torrents();
 
+    // Retry get_peers for torrents registered before the routing table had nodes.
+    void try_pending_initial_lookups();
+
     void send_announce_requests(const std::vector<AnnounceRequest>& requests);
 
     void log_dht_info(const std::string& message) const;
     void log_dht_debug(const std::string& message) const;
+    void log_get_peers_lookup_completed(const InfoHash& info_hash) const;
 
     // ---- State -------------------------------------------------------------
 

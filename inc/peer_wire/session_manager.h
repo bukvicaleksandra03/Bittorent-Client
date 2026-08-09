@@ -64,6 +64,7 @@ class SessionManager
    private:
     void print_status_locked(std::ostream& os) const;
     void status_thread_main();
+    void init_session_logger();
 
     mutable std::mutex m_mutex;
     std::vector<std::unique_ptr<TorrentManager>> m_sessions;
@@ -91,8 +92,6 @@ class SessionManager
 
     // DHT client — one per session, shared across all torrents.
     std::unique_ptr<dht::DhtClient> m_dht_client;
-
-    // Shared DHT/KRPC log: <log_output_dir>/dht.log (one file for all torrents).
-    std::string m_log_output_dir;
     std::shared_ptr<logger::Logger> m_dht_logger;
+    std::shared_ptr<logger::Logger> m_session_logger;
 };

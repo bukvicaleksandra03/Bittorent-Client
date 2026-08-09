@@ -77,7 +77,8 @@ SLOW_TEST_BINS = $(OUT_DIR)/test_tracker_communicator \
                  $(OUT_DIR)/test_dht_loopback
 # Manual-only: long real download; run via download_torrent.sh or env var.
 MANUAL_TEST_BINS = $(OUT_DIR)/test_single_torrent \
-                   $(OUT_DIR)/test_dht_get_peers_from_torrent
+                   $(OUT_DIR)/test_dht_get_peers_from_torrent \
+                   $(OUT_DIR)/test_scrape_all_torrents
 FAST_TEST_BINS = $(filter-out $(SLOW_TEST_BINS) $(MANUAL_TEST_BINS),$(TEST_BINS))
 
 $(TEST_BINS): $(OBJECTS)

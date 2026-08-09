@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
@@ -104,6 +105,26 @@ inline std::string to_hex(const PeerId& peer_id)
            << static_cast<int>(byte);
     }
     return ss.str();
+}
+
+// Replace filesystem-unfriendly characters so a name can be used safely as
+// part of a path on any OS.
+inline std::string sanitize_filename(const std::string& name)
+{
+    std::string out;
+    out.reserve(name.size());
+    for (unsigned char c : name)
+    {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.')
+        {
+            out += static_cast<char>(c);
+        }
+        else
+        {
+            out += '_';
+        }
+    }
+    return out;
 }
 
 }  // namespace utils

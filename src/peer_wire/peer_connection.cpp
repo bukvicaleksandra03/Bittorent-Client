@@ -1,5 +1,7 @@
 #include "peer_wire/peer_connection.h"
 
+#include <sys/socket.h>
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -7,7 +9,6 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
-#include <sys/socket.h>
 
 #include "byte_order.h"
 #include "net/socket_addresses.h"
@@ -40,7 +41,7 @@ PeerConnection::PeerConnection(PeerAddress peer,
 
 PeerConnection::~PeerConnection()
 {
-    if (m_current_piece)
+    if (m_current_piece && m_current_piece_exclusive)
     {
         m_piece_manager.abort_piece(m_current_piece->piece_index);
     }
@@ -80,11 +81,9 @@ void PeerConnection::recv_exact(uint8_t* buf, size_t n)
                      ? "; in-flight piece=" +
                            std::to_string(m_current_piece->piece_index) +
                            " offset=" +
-                           std::to_string(
-                               m_current_piece->next_block_offset) +
+                           std::to_string(m_current_piece->next_block_offset) +
                            " requests_in_flight=" +
-                           std::to_string(
-                               m_current_piece->requests_in_flight)
+                           std::to_string(m_current_piece->requests_in_flight)
                      : "; no piece in flight"));
     }
 }
@@ -132,8 +131,8 @@ std::optional<peer_wire::PeerMessage> PeerConnection::recv_message()
 // If the peer stops sending for longer than timeout_ms, an exception is thrown,
 // which propagates out of run(), triggers the PeerConnection destructor, and
 // releases any claimed piece back to PieceManager via abort_piece().
-std::optional<peer_wire::PeerMessage>
-PeerConnection::recv_message_timeout(int timeout_ms)
+std::optional<peer_wire::PeerMessage> PeerConnection::recv_message_timeout(
+    int timeout_ms)
 {
     uint8_t len_buf[4];
     recv_exact_timeout(len_buf, 4, timeout_ms, "message length");
@@ -163,7 +162,9 @@ PeerConnection::recv_message_timeout(int timeout_ms)
 
 // Thin wrapper around TCPDataSocket::recv_exact_timeout that adds context
 // ("handshake", "message length", …) to any exception before re-throwing.
-void PeerConnection::recv_exact_timeout(uint8_t* buf, size_t n, int timeout_ms,
+void PeerConnection::recv_exact_timeout(uint8_t* buf,
+                                        size_t n,
+                                        int timeout_ms,
                                         const std::string& context)
 {
     try
@@ -221,9 +222,8 @@ void PeerConnection::do_handshake()
     if (reply_buf[0] != peer_wire::PROTOCOL_STRING_LENGTH)
     {
         std::ostringstream oss;
-        oss << "unexpected handshake header byte 0x" << std::hex
-            << std::setw(2) << std::setfill('0')
-            << static_cast<int>(reply_buf[0])
+        oss << "unexpected handshake header byte 0x" << std::hex << std::setw(2)
+            << std::setfill('0') << static_cast<int>(reply_buf[0])
             << " (expected 0x13 — peer likely uses MSE/protocol encryption)";
         LLOG_THROW(*m_logger, oss.str());
     }
@@ -264,6 +264,17 @@ void PeerConnection::fill_requests()
         return;
     }
 
+    if (m_current_piece &&
+        m_piece_manager.have_piece(m_current_piece->piece_index))
+    {
+        LLOG_DEBUG(*m_logger,
+                   "fill_requests: piece " +
+                       std::to_string(m_current_piece->piece_index) +
+                       " already complete (endgame race); picking next");
+        m_current_piece.reset();
+        m_current_piece_exclusive = false;
+    }
+
     // Pick a new piece if we don't have one in-flight
     if (!m_current_piece)
     {
@@ -277,8 +288,8 @@ void PeerConnection::fill_requests()
         }
 
         InFlightPiece ifp;
-        ifp.piece_index = *pick;
-        ifp.piece_length = m_piece_manager.piece_length(*pick);
+        ifp.piece_index = pick->index;
+        ifp.piece_length = m_piece_manager.piece_length(pick->index);
         ifp.next_block_offset = 0;
         ifp.requests_in_flight = 0;
 
@@ -290,8 +301,10 @@ void PeerConnection::fill_requests()
         ifp.blocks_total = num_blocks;
 
         m_current_piece = std::move(ifp);
+        m_current_piece_exclusive = pick->exclusive;
         LLOG_DEBUG(*m_logger,
-                   "requesting piece " + std::to_string(*pick) + " (" +
+                   "requesting piece " + std::to_string(pick->index) +
+                       (pick->exclusive ? "" : " (endgame)") + " (" +
                        std::to_string(m_current_piece->piece_length) +
                        " bytes, " + std::to_string(num_blocks) + " blocks)");
     }
@@ -335,8 +348,7 @@ void PeerConnection::send_bitfield()
     // pieces yet (e.g. we just started downloading).
     if (have_count == 0)
     {
-        LLOG_DEBUG(*m_logger,
-                   "not sending bitfield (no pieces available yet)");
+        LLOG_DEBUG(*m_logger, "not sending bitfield (no pieces available yet)");
         return;
     }
 
@@ -385,8 +397,12 @@ void PeerConnection::handle_choke()
                    "aborting in-flight piece " +
                        std::to_string(m_current_piece->piece_index) +
                        " due to choke");
-        m_piece_manager.abort_piece(m_current_piece->piece_index);
+        if (m_current_piece_exclusive)
+        {
+            m_piece_manager.abort_piece(m_current_piece->piece_index);
+        }
         m_current_piece.reset();
+        m_current_piece_exclusive = false;
     }
 }
 
@@ -563,8 +579,13 @@ void PeerConnection::handle_piece(const peer_wire::PeerMessage& msg)
                      "piece " + std::to_string(ifp.piece_index) +
                          " failed hash verification; will be retried by "
                          "another peer");
+        if (m_current_piece_exclusive)
+        {
+            m_piece_manager.abort_piece(ifp.piece_index);
+        }
     }
     m_current_piece.reset();
+    m_current_piece_exclusive = false;
 }
 
 void PeerConnection::handle_request(const peer_wire::PeerMessage& msg)
@@ -587,10 +608,10 @@ void PeerConnection::handle_request(const peer_wire::PeerMessage& msg)
     // refuse to serve them to avoid being used as an amplification vector.
     if (req.length == 0 || req.length > BLOCK_SIZE)
     {
-        LLOG_WARNING(*m_logger,
-                     "rejecting Request with bad length=" +
-                         std::to_string(req.length) +
-                         " (index=" + std::to_string(req.index) + ")");
+        LLOG_WARNING(
+            *m_logger,
+            "rejecting Request with bad length=" + std::to_string(req.length) +
+                " (index=" + std::to_string(req.index) + ")");
         return;
     }
 
