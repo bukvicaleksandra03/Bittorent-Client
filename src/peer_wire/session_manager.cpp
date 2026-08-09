@@ -107,13 +107,11 @@ void SessionManager::start_all()
                         continue;
                     }
                     const bool added = s->add_dht_peer(pa);
-                    LLOG_INFO(*m_session_logger,
-                              "DHT peer " + pa.to_string() +
-                                  " routed to torrent \"" +
-                                  s->torrent_name() + "\" (" +
-                                  info_hash_hex + ")" +
-                                  (added ? " (added)" :
-                                           " (duplicate, not added)"));
+                    LLOG_INFO(
+                        *m_session_logger,
+                        "DHT peer " + pa.to_string() + " routed to torrent \"" +
+                            s->torrent_name() + "\" (" + info_hash_hex + ")" +
+                            (added ? " (added)" : " (duplicate, not added)"));
                 }
             });
 

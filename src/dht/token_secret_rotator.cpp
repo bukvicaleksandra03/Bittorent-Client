@@ -1,8 +1,12 @@
 #include "dht/token_secret_rotator.h"
 
-#include <iomanip>
-#include <random>
-#include <sstream>
+#include <arpa/inet.h>
+#include <openssl/rand.h>
+
+#include <cstring>
+#include <vector>
+
+#include "crypto.h"
 
 namespace dht
 {
@@ -10,50 +14,92 @@ namespace dht
 namespace
 {
 
-static constexpr auto kRotateInterval = std::chrono::minutes(5);
-
-std::string make_random_token_secret()
+std::vector<uint8_t> ip_address_bytes(const std::string& ip)
 {
-    static std::mt19937 gen(std::random_device{}());
-    static std::uniform_int_distribution<unsigned> dist(0, 255);
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (int i = 0; i < 8; ++i)
-        oss << std::setw(2) << dist(gen);
-    return oss.str();
+    struct in_addr v4 {};
+    if (::inet_pton(AF_INET, ip.c_str(), &v4) == 1)
+    {
+        std::vector<uint8_t> out(4);
+        std::memcpy(out.data(), &v4, 4);
+        return out;
+    }
+
+    struct in6_addr v6 {};
+    if (::inet_pton(AF_INET6, ip.c_str(), &v6) == 1)
+    {
+        std::vector<uint8_t> out(16);
+        std::memcpy(out.data(), &v6, 16);
+        return out;
+    }
+
+    return {};
 }
 
 }  // namespace
 
-TokenSecretRotator::TokenSecretRotator()
-    : current_token_(make_random_token_secret()),
-      prev_token_(make_random_token_secret()),
+TokenSecretRotator::TokenSecretRotator(
+    std::chrono::milliseconds rotation_interval)
+    : rotation_interval_(rotation_interval),
+      current_secret_(random_secret()),
       last_rotation_(std::chrono::steady_clock::now())
 {
 }
 
-std::string TokenSecretRotator::current_token() const
+std::string TokenSecretRotator::random_secret()
 {
-    std::lock_guard<std::mutex> lk(mutex_);
-    return current_token_;
-}
-
-bool TokenSecretRotator::verify_token(const std::string& token) const
-{
-    std::lock_guard<std::mutex> lk(mutex_);
-    return token == current_token_ || token == prev_token_;
-}
-
-void TokenSecretRotator::rotate_if_needed(
-    std::chrono::steady_clock::time_point now)
-{
-    std::lock_guard<std::mutex> lk(mutex_);
-    if (now - last_rotation_ >= kRotateInterval)
+    std::string secret(20, '\0');
+    if (RAND_bytes(reinterpret_cast<unsigned char*>(secret.data()),
+                   static_cast<int>(secret.size())) != 1)
     {
-        prev_token_ = current_token_;
-        current_token_ = make_random_token_secret();
-        last_rotation_ = now;
+        throw std::runtime_error("RAND_bytes failed");
     }
+    return secret;
+}
+
+std::string TokenSecretRotator::compute_token(const std::string& secret,
+                                              const std::string& ip)
+{
+    const std::vector<uint8_t> ip_bytes = ip_address_bytes(ip);
+    std::vector<uint8_t> material;
+    material.reserve(secret.size() + ip_bytes.size());
+    material.insert(material.end(), secret.begin(), secret.end());
+    material.insert(material.end(), ip_bytes.begin(), ip_bytes.end());
+
+    const crypto::SHA1Hash hash = crypto::sha1(material);
+    return std::string(reinterpret_cast<const char*>(hash.data()), hash.size());
+}
+
+void TokenSecretRotator::rotate_if_needed()
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_rotation_ < rotation_interval_)
+        return;
+
+    prev_secret_ = current_secret_;
+    prev_secret_expires_ = now + PREV_SECRET_TTL;
+    current_secret_ = random_secret();
+    last_rotation_ = now;
+}
+
+std::string TokenSecretRotator::issue_token(const std::string& ip) const
+{
+    return compute_token(current_secret_, ip);
+}
+
+bool TokenSecretRotator::verify_token(const std::string& token,
+                                      const std::string& ip) const
+{
+    if (token == compute_token(current_secret_, ip))
+        return true;
+
+    if (!prev_secret_.empty() &&
+        std::chrono::steady_clock::now() < prev_secret_expires_ &&
+        token == compute_token(prev_secret_, ip))
+    {
+        return true;
+    }
+
+    return false;
 }
 
 }  // namespace dht

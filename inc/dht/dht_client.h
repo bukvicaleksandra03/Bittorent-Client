@@ -12,13 +12,13 @@
 #include <vector>
 
 #include "dht/announce_coordinator.h"
-#include "info_hash.h"
 #include "dht/dht_peer_store.h"
 #include "dht/get_peers_lookup_manager.h"
 #include "dht/krpc.h"
-#include "dht/token_secret_rotator.h"
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
+#include "dht/token_secret_rotator.h"
+#include "info_hash.h"
 #include "logger.h"
 #include "peer_address.h"
 
@@ -145,7 +145,8 @@ class DhtClient
     // Periodic get_peers + announce_peer for registered torrents.
     void maintain_registered_torrents();
 
-    // Retry get_peers for torrents registered before the routing table had nodes.
+    // Retry get_peers for torrents registered before the routing table had
+    // nodes.
     void try_pending_initial_lookups();
 
     void send_announce_requests(const std::vector<AnnounceRequest>& requests);

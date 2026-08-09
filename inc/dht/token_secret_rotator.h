@@ -1,30 +1,43 @@
 #pragma once
 
 #include <chrono>
-#include <mutex>
 #include <string>
 
 namespace dht
 {
 
-// Issues and verifies BEP-5 get_peers tokens for inbound announce_peer requests.
-// Rotates the active secret every 5 minutes; the previous secret remains valid
-// so tokens are accepted for up to ~10 minutes.
+// BEP-5 announce token issuer.
+//
+// Tokens are SHA1(current_secret + requester_ip_bytes). The secret rotates every
+// five minutes; the previous secret remains valid for ten minutes so clients
+// that received a token just before rotation can still announce.
 class TokenSecretRotator
 {
-   public:
-    TokenSecretRotator();
+public:
+    static constexpr auto DEFAULT_ROTATION_INTERVAL = std::chrono::minutes(5);
+    static constexpr auto PREV_SECRET_TTL = std::chrono::minutes(10);
 
-    std::string current_token() const;
-    bool verify_token(const std::string& token) const;
-    void rotate_if_needed(std::chrono::steady_clock::time_point now =
-                              std::chrono::steady_clock::now());
+    explicit TokenSecretRotator(
+        std::chrono::milliseconds rotation_interval = DEFAULT_ROTATION_INTERVAL);
 
-   private:
-    mutable std::mutex mutex_;
-    std::string current_token_;
-    std::string prev_token_;
+    void rotate_if_needed();
+
+    // Issue a token bound to the requester's IP (UDP source address).
+    std::string issue_token(const std::string& ip) const;
+
+    // Verify token against current or still-valid previous secret for that IP.
+    bool verify_token(const std::string& token, const std::string& ip) const;
+
+private:
+    static std::string random_secret();
+    static std::string compute_token(const std::string& secret,
+                                     const std::string& ip);
+
+    std::chrono::milliseconds rotation_interval_;
+    std::string current_secret_;
+    std::string prev_secret_;
     std::chrono::steady_clock::time_point last_rotation_;
+    std::chrono::steady_clock::time_point prev_secret_expires_;
 };
 
 }  // namespace dht

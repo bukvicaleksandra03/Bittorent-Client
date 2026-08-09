@@ -413,7 +413,7 @@ void DhtClient::on_get_peers(const KrpcMessage& msg, PeerAddress pa)
         return;
 
     token_rotator_.rotate_if_needed();
-    const std::string token = token_rotator_.current_token();
+    const std::string token = token_rotator_.issue_token(pa.ip);
     const InfoHash& info_hash = *msg.info_hash;
 
     // Check if we know any live peers for this info_hash.
@@ -440,8 +440,10 @@ void DhtClient::on_announce_peer(const KrpcMessage& msg, PeerAddress pa)
     if (!msg.info_hash)
         return;
 
-    // Verify the token.
-    if (!token_rotator_.verify_token(msg.token))
+    token_rotator_.rotate_if_needed();
+
+    // BEP-5: token must match SHA1(secret + UDP source IP).
+    if (!token_rotator_.verify_token(msg.token, pa.ip))
     {
         send_krpc(make_error(msg.txn, 203, "Bad token"), pa);
         return;
