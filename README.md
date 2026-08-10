@@ -1,6 +1,6 @@
 # BitTorrent Client
 
-A C++17 BitTorrent client built from scratch for learning and experimentation. It parses `.torrent` files, talks to HTTP/UDP trackers, downloads over the peer wire protocol, and includes a Kademlia DHT implementation for peer discovery.
+A C++17 BitTorrent client built from scratch for learning and experimentation. It parses `.torrent` files ([BEP 3](https://www.bittorrent.org/beps/bep_0003.html)), connects to HTTP ([BEP 3](https://www.bittorrent.org/beps/bep_0003.html)) and UDP ([BEP 15](https://www.bittorrent.org/beps/bep_0015.html)) trackers, downloads over the peer wire protocol ([BEP 3](https://www.bittorrent.org/beps/bep_0003.html)), and includes a Kademlia DHT ([BEP 5](https://www.bittorrent.org/beps/bep_0005.html)) implementation for peer discovery.
 
 ## Features
 
