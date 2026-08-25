@@ -122,7 +122,26 @@ void TorrentManager::run_peer_worker(size_t peer_index)
 {
     m_peer_workers_started.fetch_add(1, std::memory_order_relaxed);
 
-    const PeerAddress& peer = m_all_peers[peer_index];
+    // Copy under lock: DHT callbacks may push_back on m_all_peers and reallocate
+    // storage while this worker runs; a reference would be use-after-free.
+    PeerAddress peer;
+    bool missing = false;
+    {
+        std::lock_guard<std::mutex> lock(m_spawn_mu);
+        if (peer_index >= m_all_peers.size())
+        {
+            missing = true;
+        }
+        else
+        {
+            peer = m_all_peers[peer_index];
+        }
+    }
+    if (missing)
+    {
+        on_peer_worker_finished();
+        return;
+    }
 
     // Each PeerConnection gets its own Logger with its own mutex and its own
     // log file. Peer threads therefore never contend on a shared log lock,
@@ -378,6 +397,11 @@ uint64_t TorrentManager::peer_handshake_failed() const
 uint64_t TorrentManager::peer_run_failed() const
 {
     return m_peer_run_failed.load(std::memory_order_relaxed);
+}
+
+uint64_t TorrentManager::piece_hash_failures() const
+{
+    return m_piece_manager.piece_hash_failures();
 }
 
 std::vector<PeerAddress> TorrentManager::announce(TrackerEvent event)

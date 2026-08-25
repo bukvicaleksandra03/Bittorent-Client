@@ -133,7 +133,7 @@ class PeerConnection
 
     // Maximum number of outstanding block requests we allow per peer.
     // Keeping a small pipeline improves throughput without over-buffering.
-    static constexpr uint32_t MAX_PIPELINE = 5;
+    static constexpr uint32_t MAX_PIPELINE = 15;
 
     // All block data for the current piece lives here — completely
     // thread-local.  PieceManager never touches this buffer; only

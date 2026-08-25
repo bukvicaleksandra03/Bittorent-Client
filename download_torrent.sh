@@ -30,5 +30,7 @@ echo "Using torrent: ${TORRENT_PATH}"
 
 make test_single_torrent
 
-env TORRENT_PATH="${TORRENT_PATH}" RUN_SINGLE_TORRENT_TEST=1 \
+env TORRENT_PATH="${TORRENT_PATH}" \
+    TORRENT_METRICS_DIR="${PROJECT_DIR}/logs/metrics" \
+    RUN_SINGLE_TORRENT_TEST=1 \
     "${PROJECT_DIR}/out/test_single_torrent"

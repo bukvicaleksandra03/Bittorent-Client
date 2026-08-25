@@ -77,6 +77,8 @@ class TorrentManager
     uint64_t peer_handshake_failed() const;
     uint64_t peer_run_failed() const;
 
+    uint64_t piece_hash_failures() const;
+
     // Per-peer download statistics returned by top_peers().
     struct PeerStat
     {
@@ -134,7 +136,7 @@ class TorrentManager
     std::vector<PeerAddress> m_all_peers;
     size_t m_next_peer_index = 0;
     size_t m_workers_running = 0;
-    static constexpr size_t k_max_concurrent_peers = 10;
+    static constexpr size_t k_max_concurrent_peers = 40;
 
     mutable std::mutex m_spawn_mu;
     std::vector<std::thread> m_threads;

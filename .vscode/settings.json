@@ -1,4 +1,5 @@
 {
+    "markdown.preview.securityLevel": "allowInsecureContent",
     "editor.formatOnSave": true,
     "[cpp]": {
         "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"

@@ -1,8 +1,11 @@
 #include "peer_wire/session_manager.h"
 
 #include <algorithm>
+#include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
+#include <sstream>
 #include <thread>
 
 #include "dht/dht_client.h"
@@ -16,6 +19,37 @@ namespace
 {
 // Clear screen and move cursor home (ANSI). Works in most modern terminals.
 constexpr const char k_clear_screen[] = "\033[2J\033[H";
+
+std::string json_escape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s)
+    {
+        switch (c)
+        {
+            case '\\':
+                out += "\\\\";
+                break;
+            case '"':
+                out += "\\\"";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                out += c;
+                break;
+        }
+    }
+    return out;
+}
 
 }  // namespace
 
@@ -139,6 +173,11 @@ void SessionManager::start_all()
     // Register active torrents for periodic DHT get_peers + announce_peer.
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        m_session_start_steady = std::chrono::steady_clock::now();
+        m_session_start_system = std::chrono::system_clock::now();
+        m_peak_speeds_bps.assign(m_sessions.size(), 0.0);
+        m_metrics_csv_header_written.assign(m_sessions.size(), false);
+
         for (auto& s : m_sessions)
         {
             if (s)
@@ -248,8 +287,26 @@ void SessionManager::print_status_locked(std::ostream& os) const
                                               : 0;
                 m_up_speeds_bps[i] = static_cast<double>(up_delta) / elapsed;
                 m_prev_up_bytes[i] = up_curr;
+
+                if (i < m_peak_speeds_bps.size())
+                {
+                    m_peak_speeds_bps[i] =
+                        std::max(m_peak_speeds_bps[i], m_speeds_bps[i]);
+                }
             }
             m_last_snapshot = now;
+        }
+    }
+
+    if (m_metrics_csv_header_written.size() < m_sessions.size())
+    {
+        m_metrics_csv_header_written.resize(m_sessions.size(), false);
+    }
+    for (size_t i = 0; i < m_sessions.size(); ++i)
+    {
+        if (m_sessions[i] && !m_metrics_dir.empty())
+        {
+            append_metrics_csv_locked(i);
         }
     }
 
@@ -393,4 +450,234 @@ void SessionManager::status_thread_main()
             remaining -= step;
         }
     }
+}
+
+void SessionManager::set_metrics_output_dir(const std::string& dir)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_metrics_dir = dir;
+    if (!m_metrics_dir.empty())
+    {
+        fs::create_directories(m_metrics_dir);
+    }
+}
+
+std::string SessionManager::format_iso8601_utc(
+    std::chrono::system_clock::time_point tp)
+{
+    const std::time_t t = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
+}
+
+void SessionManager::append_metrics_csv_locked(size_t session_index) const
+{
+    if (m_metrics_dir.empty() || session_index >= m_sessions.size() ||
+        !m_sessions[session_index])
+    {
+        return;
+    }
+
+    if (m_metrics_csv_header_written.size() <= session_index)
+    {
+        m_metrics_csv_header_written.resize(session_index + 1, false);
+    }
+
+    const TorrentManager& s = *m_sessions[session_index];
+    const std::string base = utils::sanitize_filename(s.torrent_name());
+    const fs::path csv_path =
+        fs::path(m_metrics_dir) / (base + "_progress.csv");
+
+    const bool write_header = !m_metrics_csv_header_written[session_index];
+
+    std::ofstream out(csv_path, std::ios::app);
+    if (!out)
+    {
+        return;
+    }
+
+    if (write_header)
+    {
+        out << "timestamp_iso,torrent_name,info_hash_hex,progress_pct,"
+               "downloaded_bytes,total_bytes,speed_bps,up_speed_bps,"
+               "dht_peers,workers_started,handshakes_ok,handshakes_failed,"
+               "peer_run_failed,piece_hash_failures,elapsed_sec,state\n";
+        m_metrics_csv_header_written[session_index] = true;
+    }
+
+    const auto now_system = std::chrono::system_clock::now();
+    double elapsed_sec = 0.0;
+    if (m_session_start_steady != std::chrono::steady_clock::time_point{})
+    {
+        elapsed_sec = std::chrono::duration<double>(
+                          std::chrono::steady_clock::now() -
+                          m_session_start_steady)
+                          .count();
+    }
+
+    const double speed =
+        (session_index < m_speeds_bps.size()) ? m_speeds_bps[session_index]
+                                              : 0.0;
+    const double up_speed = (session_index < m_up_speeds_bps.size())
+                                ? m_up_speeds_bps[session_index]
+                                : 0.0;
+
+    std::string state = "downloading";
+    if (s.is_complete())
+    {
+        state = s.is_seeding() ? "seeding" : "complete";
+    }
+
+    out << format_iso8601_utc(now_system) << ','
+        << '"' << json_escape(s.torrent_name()) << '"' << ','
+        << s.info_hash_hex() << ','
+        << std::fixed << std::setprecision(4) << s.progress() << ','
+        << s.downloaded_bytes() << ','
+        << s.total_bytes() << ','
+        << std::setprecision(2) << speed << ','
+        << up_speed << ','
+        << s.dht_peers_discovered() << ','
+        << s.peer_workers_started() << ','
+        << s.peer_handshakes_ok() << ','
+        << s.peer_handshake_failed() << ','
+        << s.peer_run_failed() << ','
+        << s.piece_hash_failures() << ','
+        << std::setprecision(3) << elapsed_sec << ','
+        << state << '\n';
+}
+
+std::vector<SessionRunSummary> SessionManager::collect_run_summaries() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    const auto end_steady = std::chrono::steady_clock::now();
+    const auto end_system = std::chrono::system_clock::now();
+
+    double duration_sec = 0.0;
+    if (m_session_start_steady != std::chrono::steady_clock::time_point{})
+    {
+        duration_sec =
+            std::chrono::duration<double>(end_steady - m_session_start_steady)
+                .count();
+    }
+
+    const std::string started_iso =
+        (m_session_start_system != std::chrono::system_clock::time_point{})
+            ? format_iso8601_utc(m_session_start_system)
+            : std::string{};
+    const std::string completed_iso = format_iso8601_utc(end_system);
+
+    std::vector<SessionRunSummary> out;
+    out.reserve(m_sessions.size());
+
+    for (size_t i = 0; i < m_sessions.size(); ++i)
+    {
+        const auto& s = m_sessions[i];
+        if (!s)
+        {
+            continue;
+        }
+
+        SessionRunSummary summary;
+        summary.torrent_name = s->torrent_name();
+        summary.info_hash_hex = s->info_hash_hex();
+        summary.started_at_iso = started_iso;
+        summary.completed_at_iso = completed_iso;
+        summary.duration_sec = duration_sec;
+        summary.total_bytes = s->total_bytes();
+        summary.downloaded_bytes = s->downloaded_bytes();
+        summary.progress_pct = s->progress();
+        summary.dht_peers_discovered = s->dht_peers_discovered();
+        summary.peer_workers_started = s->peer_workers_started();
+        summary.peer_handshakes_ok = s->peer_handshakes_ok();
+        summary.peer_handshake_failed = s->peer_handshake_failed();
+        summary.peer_run_failed = s->peer_run_failed();
+        summary.piece_hash_failures = s->piece_hash_failures();
+        summary.uploaded_bytes = s->uploaded_bytes();
+        summary.blocks_uploaded = s->blocks_uploaded();
+        summary.complete = s->is_complete();
+
+        if (duration_sec > 0.0)
+        {
+            summary.avg_speed_bps =
+                static_cast<double>(summary.downloaded_bytes) / duration_sec;
+        }
+        summary.peak_speed_bps =
+            (i < m_peak_speeds_bps.size()) ? m_peak_speeds_bps[i] : 0.0;
+
+        if (!m_metrics_dir.empty())
+        {
+            const std::string base =
+                utils::sanitize_filename(summary.torrent_name);
+            summary.progress_csv_path =
+                (fs::path(m_metrics_dir) / (base + "_progress.csv")).string();
+        }
+
+        out.push_back(std::move(summary));
+    }
+
+    return out;
+}
+
+void SessionManager::write_run_summary_json(
+    const SessionRunSummary& summary,
+    const std::string& output_path,
+    std::optional<bool> reference_match)
+{
+    fs::create_directories(fs::path(output_path).parent_path());
+
+    std::ofstream out(output_path);
+    if (!out)
+    {
+        return;
+    }
+
+    out << std::fixed << std::setprecision(4);
+    out << "{\n";
+    out << "  \"torrent_name\": \"" << json_escape(summary.torrent_name)
+        << "\",\n";
+    out << "  \"info_hash_hex\": \"" << json_escape(summary.info_hash_hex)
+        << "\",\n";
+    out << "  \"started_at\": \"" << json_escape(summary.started_at_iso)
+        << "\",\n";
+    out << "  \"completed_at\": \"" << json_escape(summary.completed_at_iso)
+        << "\",\n";
+    out << "  \"duration_sec\": " << std::setprecision(3) << summary.duration_sec
+        << ",\n";
+    out << std::setprecision(4);
+    out << "  \"total_bytes\": " << summary.total_bytes << ",\n";
+    out << "  \"downloaded_bytes\": " << summary.downloaded_bytes << ",\n";
+    out << "  \"progress_pct\": " << summary.progress_pct << ",\n";
+    out << "  \"avg_speed_bps\": " << std::setprecision(2) << summary.avg_speed_bps
+        << ",\n";
+    out << "  \"peak_speed_bps\": " << summary.peak_speed_bps << ",\n";
+    out << std::setprecision(0);
+    out << "  \"dht_peers_discovered\": " << summary.dht_peers_discovered
+        << ",\n";
+    out << "  \"peer_workers_started\": " << summary.peer_workers_started
+        << ",\n";
+    out << "  \"peer_handshakes_ok\": " << summary.peer_handshakes_ok << ",\n";
+    out << "  \"peer_handshake_failed\": " << summary.peer_handshake_failed
+        << ",\n";
+    out << "  \"peer_run_failed\": " << summary.peer_run_failed << ",\n";
+    out << "  \"piece_hash_failures\": " << summary.piece_hash_failures
+        << ",\n";
+    out << "  \"uploaded_bytes\": " << summary.uploaded_bytes << ",\n";
+    out << "  \"blocks_uploaded\": " << summary.blocks_uploaded << ",\n";
+    out << "  \"complete\": " << (summary.complete ? "true" : "false") << ",\n";
+    out << "  \"progress_csv\": \"" << json_escape(summary.progress_csv_path)
+        << "\"";
+    if (reference_match.has_value())
+    {
+        out << ",\n  \"reference_match\": "
+            << (reference_match.value() ? "true" : "false");
+    }
+    out << "\n}\n";
 }

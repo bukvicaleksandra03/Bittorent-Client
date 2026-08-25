@@ -130,6 +130,7 @@ bool PieceManager::complete_piece(uint32_t piece_index,
         {
             return true;
         }
+        m_piece_hash_failures.fetch_add(1, std::memory_order_relaxed);
         if (m_logger)
         {
             LLOG_WARNING(

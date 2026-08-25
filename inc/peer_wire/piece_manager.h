@@ -116,6 +116,12 @@ class PieceManager
                100.0;
     }
 
+    // Pieces rejected because assembled data failed SHA-1 verification.
+    uint64_t piece_hash_failures() const
+    {
+        return m_piece_hash_failures.load(std::memory_order_relaxed);
+    }
+
    private:
     uint64_t m_total_length_bytes;
 
@@ -137,6 +143,8 @@ class PieceManager
 
     // Number of pieces that have passed hash verification.
     std::atomic<uint32_t> m_completed_count{0};
+
+    std::atomic<uint64_t> m_piece_hash_failures{0};
 
     DiskWriter& m_disk_writer;
 

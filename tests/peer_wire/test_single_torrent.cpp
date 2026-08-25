@@ -14,6 +14,7 @@
 //                          (default:
 //                          <project>/torrent_files/downloaded_using_qbittorent)
 //   TORRENT_LOG_DIR        Log directory (default: <project>/logs)
+//   TORRENT_METRICS_DIR    CSV/JSON metrics (default: <project>/logs/metrics)
 //   SINGLE_TORRENT_MAX_SEC Stop after N seconds (incomplete ok); 0 = until done
 
 #include <gtest/gtest.h>
@@ -24,6 +25,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,6 +34,7 @@
 #include "logger.h"
 #include "peer_wire/session_manager.h"
 #include "peer_wire/torrent_manager.h"
+#include "utils.h"
 
 namespace fs = std::filesystem;
 
@@ -159,6 +162,26 @@ void expect_download_matches_reference(
     }
 }
 
+void write_run_summaries(
+    const SessionManager& sessions,
+    const std::string& metrics_dir,
+    std::optional<bool> reference_match = std::nullopt)
+{
+    if (metrics_dir.empty())
+    {
+        return;
+    }
+
+    for (const SessionRunSummary& summary : sessions.collect_run_summaries())
+    {
+        const std::string base = utils::sanitize_filename(summary.torrent_name);
+        const fs::path json_path =
+            fs::path(metrics_dir) / (base + "_summary.json");
+        SessionManager::write_run_summary_json(
+            summary, json_path.string(), reference_match);
+    }
+}
+
 }  // namespace
 
 TEST(SingleTorrent, DownloadWithProgressLogging)
@@ -201,8 +224,15 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
         log_env ? std::string(log_env) : (project_root() / "logs").string();
     fs::create_directories(log_dir);
 
+    const char* metrics_env = std::getenv("TORRENT_METRICS_DIR");
+    const std::string metrics_dir =
+        metrics_env ? std::string(metrics_env)
+                    : (project_root() / "logs" / "metrics").string();
+    fs::create_directories(metrics_dir);
+
     std::cout << "Output directory: " << output_dir << "\n";
     std::cout << "Log directory:    " << log_dir << "\n";
+    std::cout << "Metrics directory: " << metrics_dir << "\n";
     std::cout << "Info hash: " << torrent->get_info_hash_hex() << "\n";
 
     int max_sec = 0;
@@ -212,6 +242,7 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
     }
 
     SessionManager sessions;
+    sessions.set_metrics_output_dir(metrics_dir);
     sessions.add(std::make_unique<TorrentManager>(
         std::move(torrent), output_dir, log_dir, logger::Level::DEBUG));
     sessions.start_all();
@@ -246,6 +277,7 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
     }
 
     sessions.stop_all();
+    write_run_summaries(sessions, metrics_dir);
 
     if (timed_out)
     {
@@ -261,6 +293,8 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
 
     expect_download_matches_reference(
         output_dir, reference_dir, torrent_name, is_multifile, file_layout);
+
+    write_run_summaries(sessions, metrics_dir, true);
 
     std::cout << "Download finished and matched reference under "
               << reference_dir << "\n";
