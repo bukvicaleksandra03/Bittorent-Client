@@ -1,9 +1,11 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,6 +19,24 @@
 #include "utils.h"
 
 class PeerConnection;
+
+// Per-torrent download metrics (written to JSON on completion).
+struct TorrentRunSummary
+{
+    std::string torrent_name;
+    std::string info_hash_hex;
+    std::string duration;
+    std::string size;
+    double avg_speed_bps{0.0};
+    double peak_speed_bps{0.0};
+    size_t dht_peers_discovered{0};
+    uint64_t peer_workers_started{0};
+    uint64_t peer_handshakes_ok{0};
+    uint64_t peer_handshake_failed{0};
+    uint64_t peer_run_failed{0};
+    uint64_t piece_hash_failures{0};
+    bool complete{false};
+};
 
 class TorrentManager
 {
@@ -97,6 +117,22 @@ class TorrentManager
 
     logger::Level log_level() const;
 
+    // Run metrics (start time set in start(); completion/peak updated by
+    // SessionManager during status refresh).
+    void record_download_sample(double download_bps);
+    void mark_complete_at(std::chrono::steady_clock::time_point when);
+    TorrentRunSummary build_run_summary() const;
+    bool try_mark_summary_written() const;
+
+    static void write_run_summary_json(
+        const TorrentRunSummary& summary,
+        const std::string& output_path,
+        std::optional<bool> reference_match = std::nullopt);
+
+    void write_run_summary_json(
+        const std::string& output_path,
+        std::optional<bool> reference_match = std::nullopt) const;
+
    private:
     enum class TrackerEvent : uint32_t
     {
@@ -160,4 +196,9 @@ class TorrentManager
 
     std::atomic<bool> m_started{false};
     std::atomic<bool> m_stopped{false};
+
+    std::chrono::steady_clock::time_point m_start_steady{};
+    std::chrono::steady_clock::time_point m_complete_steady{};
+    double m_peak_speed_bps{0.0};
+    mutable std::atomic<bool> m_summary_written{false};
 };

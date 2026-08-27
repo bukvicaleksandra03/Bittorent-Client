@@ -44,6 +44,7 @@ SOURCES = $(SRC_DIR)/net/socket.cpp \
           $(SRC_DIR)/peer_wire/session_manager.cpp \
           $(SRC_DIR)/dht/node_id.cpp \
           $(SRC_DIR)/dht/routing_table.cpp \
+          $(SRC_DIR)/dht/routing_table_store.cpp \
           $(SRC_DIR)/dht/krpc.cpp \
           $(SRC_DIR)/dht/dht_peer_store.cpp \
           $(SRC_DIR)/dht/kademlia_lookup.cpp \
@@ -77,6 +78,7 @@ SLOW_TEST_BINS = $(OUT_DIR)/test_tracker_communicator \
                  $(OUT_DIR)/test_dht_loopback
 # Manual-only: long real download; run via download_torrent.sh or env var.
 MANUAL_TEST_BINS = $(OUT_DIR)/test_single_torrent \
+                   $(OUT_DIR)/test_parallel_torrents \
                    $(OUT_DIR)/test_dht_get_peers_from_torrent \
                    $(OUT_DIR)/test_scrape_all_torrents
 FAST_TEST_BINS = $(filter-out $(SLOW_TEST_BINS) $(MANUAL_TEST_BINS),$(TEST_BINS))

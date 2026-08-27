@@ -15,6 +15,8 @@ A C++17 BitTorrent client built from scratch for learning and experimentation. I
 | **Download pipeline** | Piece manager, disk writer, multi-peer workers per torrent |
 | **Session management** | Multiple torrents on one listen port, UPnP port mapping, live status display |
 | **DHT (BEP 5)** | KRPC, routing table, node lookup, `get_peers`, `announce_peer`, token secrets |
+| **DHT persistence** | `RoutingTableStore` saves/loads k-buckets between runs (warm start when enough peers respond) |
+| **Run metrics** | JSON summaries per torrent, DHT session, and parallel batch (`logs/metrics/`) |
 | **Networking** | TCP/UDP sockets, OpenSSL TLS wrapper, UPnP (miniupnpc-style port forward) |
 | **Logging** | Structured file logging per torrent/session |
 | **Tests** | Google Test binaries under `tests/` (unit, loopback, integration) |
@@ -24,14 +26,15 @@ A C++17 BitTorrent client built from scratch for learning and experimentation. I
 ```
 inc/                    Public headers
   bencode/              Bencode types, parser, encoder
-  dht/                  DHT client, KRPC, routing table, lookups
+  dht/                  DHT client, KRPC, routing table, routing table store, lookups
   net/                  Sockets, SSL, UPnP
   peer_wire/            Messages, connections, piece manager, session
   trackers/             HTTP/UDP tracker communicators
 src/                    Implementations (mirrors inc/ layout)
 tests/                  Google Test sources (mirrors components)
 torrent_files/          Sample torrents and download output
-logs/                   Runtime logs (gitignored content)
+routing_table_store/    Persisted DHT routing table (default: routing_table.txt)
+logs/                   Runtime logs and metrics JSON (gitignored content)
 obj/                    Build objects (generated)
 out/                    Test binaries (generated)
 ```
@@ -61,6 +64,7 @@ DhtClient
   ├── recv_thread_            receives and handles messages
   ├── maint_thread_           bootstrap, bucket refresh, registered-torrent upkeep
   ├── RoutingTable            160 k-buckets × k=8 (XOR distance to self_id)
+  ├── RoutingTableStore       load/save routing table to disk (warm start)
   ├── GetPeersLookupManager   iterative get_peers per info hash
   │     └── KademliaLookup    
   ├── DhtPeerStore            LRU peers per info hash (30 min TTL)
@@ -81,6 +85,32 @@ DhtClient
 1. Remote nodes that answer our `get_peers` may return a **token**; `AnnounceCoordinator` caches `(PeerAddress → token)` per info hash.
 2. For torrents registered via `register_torrent()`, the coordinator schedules periodic refresh and emits `AnnounceRequest`s (token + listen port).
 3. When acting as a DHT **server**, `on_get_peers` issues tokens via `TokenSecretRotator` (IP-bound SHA1); `on_announce_peer` verifies them before recording the peer in `DhtPeerStore`.
+
+**Routing table persistence (`RoutingTableStore`)**
+
+`RoutingTableStore` (`inc/dht/routing_table_store.h`) writes the current k-buckets to a text file and reloads them on the next `DhtClient::start()`. This avoids cold bootstrap on every run when enough stored nodes still respond to ping.
+
+| Item | Detail |
+|------|--------|
+| Default path | `routing_table_store/routing_table.txt` |
+| Override | `DHT_ROUTING_TABLE_PATH` env or `DhtClient::set_routing_table_path()` |
+| Clear on start | `DHT_CLEAR_ROUTING=1` or `set_clear_persisted_routing_table(true)` |
+| Warm-start rule | After load, `DhtClient` pings stored peers; if at least **4** are verified good, public bootstrap is skipped |
+| Loaded entries | Restored nodes are not marked good until contact succeeds |
+
+On shutdown, `DhtClient::stop()` saves the table when persistence is enabled. Integration scripts (`download_torrent.sh`, `download_parallel_torrents.sh`) point `DHT_ROUTING_TABLE_PATH` at the project copy under `routing_table_store/`.
+
+**Run metrics**
+
+Long-running integration tests write JSON under `logs/metrics/` automatically (no manual flush in test code):
+
+| File | Source |
+|------|--------|
+| `<torrent>_summary.json` | `TorrentRunSummary` from `TorrentManager` (duration, speeds, peer/DHT counters) |
+| `dht_summary.json` | `DhtRunSummary` from `DhtClient` (bootstrap latency, bucket fill) |
+| `parallel_batch_summary.json` | Combined run when multiple torrents finish in one `SessionManager` |
+
+Set the output directory with `TORRENT_METRICS_DIR`. Optional `reference_match` is included when reference verification runs.
 
 ---
 
@@ -135,12 +165,51 @@ make test-integration          # slow; hits real trackers
 These are **not** part of `make test`:
 
 ```bash
-# Download one torrent end-to-end
+# Download one torrent end-to-end (default: linuxmint-22.2-cinnamon-64bit.iso.torrent)
 ./download_torrent.sh [torrent-name]
+
+# Download multiple torrents in parallel (one process, shared SessionManager / DHT / listen port)
+./download_parallel_torrents.sh [count]
+# Default count=3 uses built-in torrents: kali, debian amd64 netinst, debian mac netinst
 
 # DHT peer discovery against a real swarm
 ./dht_test.sh
 RUN_DHT_PEER_DISCOVERY_TEST=1 ./out/test_dht_get_peers_from_torrent
 ```
 
-Sample `.torrent` files live in `torrent_files/unparsed_torrents/`. Downloads go to `torrent_files/downloaded/`.
+Sample `.torrent` files live in `torrent_files/unparsed_torrents/`. Single downloads go to `torrent_files/downloaded/`; parallel runs use `torrent_files/downloaded/parallel/<torrent-name>/`.
+
+**Single torrent** (`download_torrent.sh` / `test_single_torrent`):
+
+| Variable | Purpose |
+|----------|---------|
+| `TORRENT_PATH` | Full path to one `.torrent` (set by script) |
+| `DHT_ROUTING_TABLE_PATH` | Persisted routing table path |
+| `DHT_CLEAR_ROUTING=1` | Delete store and force bootstrap |
+| `TORRENT_SKIP_REFERENCE=1` | Skip qBittorrent reference file check |
+| `SINGLE_TORRENT_MAX_SEC` | Wall-clock limit (`0` = until complete) |
+
+**Parallel torrents** (`download_parallel_torrents.sh` / `test_parallel_torrents`):
+
+| Variable | Purpose |
+|----------|---------|
+| `PARALLEL_TORRENT_COUNT` | How many torrents to run (default `3`; uses first N from the default set) |
+| `TORRENT_PATHS` | Colon-separated list of `.torrent` paths (overrides defaults) |
+| `TORRENT_DIR` | Scan a directory for `.torrent` files instead of the built-in default set |
+| `TORRENT_TEST_OUT` | Base download directory (per-torrent subdirs) |
+| `TORRENT_METRICS_DIR` | JSON metrics output (default `logs/metrics`) |
+| `TORRENT_SKIP_REFERENCE` | Default `1` in the shell script |
+| `PARALLEL_TORRENT_MAX_SEC` | Wall-clock limit (`0` = until all complete) |
+| `DHT_ROUTING_TABLE_PATH` / `DHT_CLEAR_ROUTING` | Same as single-torrent runs |
+
+Built-in default torrents (when `TORRENT_PATHS` and `TORRENT_DIR` are unset):
+
+- `kali-linux-2026.2-installer-amd64.iso.torrent`
+- `debian-13.5.0-amd64-netinst.iso.torrent`
+- `debian-mac-13.5.0-amd64-netinst.iso.torrent`
+
+Run the test binary directly:
+
+```bash
+RUN_PARALLEL_TORRENTS_TEST=1 ./out/test_parallel_torrents
+```

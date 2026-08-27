@@ -11,40 +11,10 @@
 #include <thread>
 #include <vector>
 
+#include "dht/dht_client.h"
 #include "logger.h"
 #include "net/upnp.h"
-
-namespace dht
-{
-class DhtClient;
-}
-
-class TorrentManager;
-
-// Aggregated metrics for one torrent session (thesis / benchmarking).
-struct SessionRunSummary
-{
-    std::string torrent_name;
-    std::string info_hash_hex;
-    std::string started_at_iso;
-    std::string completed_at_iso;
-    double duration_sec{0.0};
-    uint64_t total_bytes{0};
-    uint64_t downloaded_bytes{0};
-    double progress_pct{0.0};
-    double avg_speed_bps{0.0};
-    double peak_speed_bps{0.0};
-    size_t dht_peers_discovered{0};
-    uint64_t peer_workers_started{0};
-    uint64_t peer_handshakes_ok{0};
-    uint64_t peer_handshake_failed{0};
-    uint64_t peer_run_failed{0};
-    uint64_t piece_hash_failures{0};
-    uint64_t uploaded_bytes{0};
-    uint64_t blocks_uploaded{0};
-    bool complete{false};
-    std::string progress_csv_path;
-};
+#include "peer_wire/torrent_manager.h"
 
 // Owns multiple TorrentManager instances, coordinates start/stop, and prints
 // human-readable status to a stream (separate from structured file logging).
@@ -87,23 +57,22 @@ class SessionManager
 
     bool status_refresh_running() const;
 
-    // When set, each status refresh also appends a row to
-    // <dir>/<torrent>_progress.csv (created on first sample).
+    // When set, torrent summaries are written under <dir>/<name>_summary.json
+    // on completion (status refresh) and flushed again in stop_all().
+    // stop_all() also writes <dir>/dht_summary.json and, for multiple
+    // torrents, <dir>/parallel_batch_summary.json.
     void set_metrics_output_dir(const std::string& dir);
 
-    // Build run summaries from current session state (call after stop_all()).
-    std::vector<SessionRunSummary> collect_run_summaries() const;
+    // If set before stop_all(), included in the final torrent summary JSON
+    // (e.g. after a reference-file check in integration tests).
+    void set_reference_match(std::optional<bool> match);
 
-    // Write one summary JSON file next to the CSV (same sanitized base name).
-    static void write_run_summary_json(
-        const SessionRunSummary& summary,
-        const std::string& output_path,
-        std::optional<bool> reference_match = std::nullopt);
+    // Build per-torrent summaries from tracked download windows.
+    std::vector<TorrentRunSummary> collect_run_summaries() const;
 
    private:
-    void append_metrics_csv_locked(size_t session_index) const;
-    static std::string format_iso8601_utc(
-        std::chrono::system_clock::time_point tp);
+    void flush_torrent_summaries_locked() const;
+    void write_parallel_batch_summary_locked() const;
     void print_status_locked(std::ostream& os) const;
     void status_thread_main();
     void init_session_logger();
@@ -128,10 +97,7 @@ class SessionManager
     mutable std::vector<double> m_up_speeds_bps;
 
     std::string m_metrics_dir;
-    std::chrono::steady_clock::time_point m_session_start_steady{};
-    std::chrono::system_clock::time_point m_session_start_system{};
-    mutable std::vector<double> m_peak_speeds_bps;
-    mutable std::vector<bool> m_metrics_csv_header_written;
+    std::optional<bool> m_reference_match;
 
     // Single UPnP port mapping shared by all torrents in the session.
     // Kept alive until the SessionManager is destroyed.

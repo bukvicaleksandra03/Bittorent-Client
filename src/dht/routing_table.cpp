@@ -67,6 +67,7 @@ RoutingEntry RoutingEntry::from_compact(const std::string& data, size_t offset)
 RoutingTable::RoutingTable(const NodeId& self_id) : self_id_(self_id)
 {
     bucket_sizes_.fill(0);
+    peers_received_per_bucket_.fill(0);
 }
 
 void RoutingTable::set_dht_logger(std::shared_ptr<logger::Logger> logger)
@@ -157,7 +158,7 @@ void RoutingTable::touch_bucket_entry(size_t bucket,
     }
 }
 
-void RoutingTable::add(const RoutingEntry& entry)
+void RoutingTable::add(const RoutingEntry& entry, bool count_as_received)
 {
     if (entry.id == self_id_ || entry.id.is_zero())
         return;
@@ -170,6 +171,9 @@ void RoutingTable::add(const RoutingEntry& entry)
         log_error("routing add: no bucket for node " + entry.to_string());
         return;
     }
+
+    if (count_as_received)
+        ++peers_received_per_bucket_[bucket];
 
     log_info("Adding routing entry " + entry.to_string() + " to bucket " +
              std::to_string(bucket));
@@ -249,6 +253,18 @@ size_t RoutingTable::size() const
     for (size_t n : bucket_sizes_)
         total += n;
     return total;
+}
+
+RoutingTable::BucketSnapshot RoutingTable::bucket_occupancy() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return bucket_sizes_;
+}
+
+RoutingTable::BucketSnapshot RoutingTable::peers_received_per_bucket() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return peers_received_per_bucket_;
 }
 
 std::vector<RoutingEntry> RoutingTable::all_unlocked() const

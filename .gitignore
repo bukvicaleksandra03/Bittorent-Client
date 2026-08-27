@@ -14,5 +14,8 @@ torrent_files/torrent_file_objects
 .cache/
 
 # Logs
-log/
+logs/
 *.log
+
+# DHT routing table persistence (local cache)
+routing_table_store/

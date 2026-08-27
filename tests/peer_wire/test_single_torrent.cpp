@@ -162,24 +162,10 @@ void expect_download_matches_reference(
     }
 }
 
-void write_run_summaries(
-    const SessionManager& sessions,
-    const std::string& metrics_dir,
-    std::optional<bool> reference_match = std::nullopt)
+bool skip_reference_check()
 {
-    if (metrics_dir.empty())
-    {
-        return;
-    }
-
-    for (const SessionRunSummary& summary : sessions.collect_run_summaries())
-    {
-        const std::string base = utils::sanitize_filename(summary.torrent_name);
-        const fs::path json_path =
-            fs::path(metrics_dir) / (base + "_summary.json");
-        SessionManager::write_run_summary_json(
-            summary, json_path.string(), reference_match);
-    }
+    const char* env = std::getenv("TORRENT_SKIP_REFERENCE");
+    return env && env[0] != '\0' && env[0] != '0';
 }
 
 }  // namespace
@@ -276,26 +262,33 @@ TEST(SingleTorrent, DownloadWithProgressLogging)
         std::this_thread::sleep_for(wait_poll);
     }
 
-    sessions.stop_all();
-    write_run_summaries(sessions, metrics_dir);
-
     if (timed_out)
     {
+        sessions.stop_all();
         std::cout << "Stopped early; data under: " << output_dir << "\n";
         GTEST_SKIP() << "Timed out before completion.";
     }
 
     EXPECT_TRUE(sessions.all_complete());
 
-    const char* ref_env = std::getenv("TORRENT_REFERENCE_DIR");
-    const std::string reference_dir =
-        ref_env ? std::string(ref_env) : default_reference_dir();
+    if (!skip_reference_check())
+    {
+        const char* ref_env = std::getenv("TORRENT_REFERENCE_DIR");
+        const std::string reference_dir =
+            ref_env ? std::string(ref_env) : default_reference_dir();
 
-    expect_download_matches_reference(
-        output_dir, reference_dir, torrent_name, is_multifile, file_layout);
+        expect_download_matches_reference(
+            output_dir, reference_dir, torrent_name, is_multifile, file_layout);
 
-    write_run_summaries(sessions, metrics_dir, true);
+        sessions.set_reference_match(true);
 
-    std::cout << "Download finished and matched reference under "
-              << reference_dir << "\n";
+        std::cout << "Download finished and matched reference under "
+                  << reference_dir << "\n";
+    }
+    else
+    {
+        std::cout << "Download finished (reference check skipped).\n";
+    }
+
+    sessions.stop_all();
 }

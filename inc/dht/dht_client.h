@@ -32,6 +32,26 @@ namespace dht
 using PeerCallback =
     std::function<void(const std::string& info_hash_hex, PeerAddress pa)>;
 
+// Point-in-time DHT performance counters (bootstrap + routing table fill).
+struct DhtPerformanceSnapshot
+{
+    bool bootstrap_skipped{false};
+    bool bootstrap_complete{false};
+    // Seconds until the first good routing entry after bootstrap; 0 on warm start.
+    double bootstrap_latency_sec{-1.0};
+    size_t loaded_entries_at_start{0};
+    size_t routing_table_total{0};
+    size_t routing_table_good{0};
+    double uptime_sec{0.0};
+};
+
+// Run metrics captured before the DHT node stops (one summary file per node run).
+struct DhtRunSummary
+{
+    DhtPerformanceSnapshot dht;
+    std::vector<std::string> bucket_lines;
+};
+
 // ---------------------------------------------------------------------------
 // DhtClient – the public interface to the DHT subsystem.
 //
@@ -62,6 +82,13 @@ class DhtClient
     // When false, start() and maintenance will not contact public bootstrap
     // nodes (for loopback/unit tests).  Must be set before start().
     void set_bootstrap_on_start(bool enabled);
+
+    // Persist routing table to disk (default path: routing_table_store/routing_table.txt).
+    // Must be configured before start().
+    void set_routing_table_path(const std::string& path);
+    void set_persist_routing_table(bool enabled);
+    // When true, delete persisted file on start() and always bootstrap.
+    void set_clear_persisted_routing_table(bool clear);
 
     // Gracefully stop the background threads and close the socket.
     void stop();
@@ -99,6 +126,27 @@ class DhtClient
     // Number of nodes currently in the routing table.
     size_t routing_table_size() const;
 
+    // Entries considered "good" by the routing table (used for warm-start skip).
+    size_t good_routing_entries() const;
+
+    // Bootstrap and routing-table metrics for benchmarking / thesis plots.
+    DhtPerformanceSnapshot performance_snapshot() const;
+
+    using BucketSnapshot = RoutingTable::BucketSnapshot;
+
+    // Per-bucket routing table occupancy (0..K) at the time of the call.
+    BucketSnapshot bucket_occupancy() const;
+
+    // Cumulative peers learned per bucket since start (network only, not load).
+    BucketSnapshot peers_received_per_bucket() const;
+
+    DhtRunSummary build_run_summary() const;
+
+    static void write_run_summary_json(const DhtRunSummary& summary,
+                                       const std::string& output_path);
+
+    void write_run_summary_json(const std::string& output_path) const;
+
     // Non-expired peers stored for info_hash (from DHT get_peers responses).
     size_t live_peer_count(const InfoHash& info_hash) const;
 
@@ -135,6 +183,11 @@ class DhtClient
 
     void bootstrap();
     void maintenance_loop();
+    void load_persisted_routing_table();
+    void verify_loaded_routing_entries();
+    void save_persisted_routing_table();
+    size_t count_good_routing_entries() const;
+    void maybe_mark_bootstrap_complete();
 
     // Ping one bootstrap node to seed the routing table.
     void ping_bootstrap(const std::string& host, uint16_t port);
@@ -181,8 +234,20 @@ class DhtClient
 
     std::chrono::steady_clock::time_point last_bootstrap_attempt_{};
     std::chrono::steady_clock::time_point last_lookup_tick_{};
+    std::chrono::steady_clock::time_point node_start_time_{};
+    std::chrono::steady_clock::time_point bootstrap_start_time_{};
+    size_t loaded_entries_at_start_{0};
+    bool bootstrap_skipped_{false};
+    bool bootstrap_complete_{false};
+    double bootstrap_latency_sec_{-1.0};
     bool bootstrap_connectivity_warned_{false};
     bool bootstrap_on_start_{true};
+
+    std::string routing_table_path_{"routing_table_store/routing_table.txt"};
+    bool persist_routing_table_{true};
+    bool clear_persisted_on_start_{false};
+    std::chrono::steady_clock::time_point last_routing_table_save_{};
+    static constexpr auto ROUTING_TABLE_SAVE_INTERVAL = std::chrono::minutes(5);
 
     // Round-robin offset into buckets_needing_refresh(); spreads refresh load.
     size_t refresh_bucket_cursor_{0};

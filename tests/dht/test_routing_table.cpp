@@ -9,6 +9,34 @@
 
 #include <string>
 
+namespace {
+
+size_t first_bucket_with(const dht::RoutingTable::BucketSnapshot& snap,
+                         size_t value)
+{
+    for (size_t i = 0; i < snap.size(); ++i)
+    {
+        if (snap[i] == value)
+            return i;
+    }
+    ADD_FAILURE() << "no bucket with value " << value;
+    return snap.size();
+}
+
+// Build a node ID that maps to bucket when self_id is all zeros.
+dht::NodeId id_for_bucket(size_t bucket, unsigned variant)
+{
+    dht::NodeId id{};
+    const size_t byte_idx = bucket / 8;
+    const unsigned bit = 7u - static_cast<unsigned>(bucket % 8);
+    id.bytes[byte_idx] = static_cast<uint8_t>(1u << bit);
+    id.bytes[18] = static_cast<uint8_t>((variant >> 8) & 0xFF);
+    id.bytes[19] = static_cast<uint8_t>(variant & 0xFF);
+    return id;
+}
+
+}  // namespace
+
 // ===========================================================================
 // RoutingTable
 // ===========================================================================
@@ -79,4 +107,69 @@ TEST(RoutingTable, GetAllNodes)
 
     auto all = rt.all();
     EXPECT_EQ(all.size(), 5u);
+}
+
+TEST(RoutingTable, BucketOccupancySnapshot)
+{
+    dht::NodeId self{};
+    dht::RoutingTable rt(self);
+
+    dht::NodeId id{};
+    id.bytes[19] = 0x80;
+    rt.add({id, PeerAddress("127.0.0.1", 6881)});
+
+    const auto occ = rt.bucket_occupancy();
+    const size_t bucket = first_bucket_with(occ, 1u);
+    EXPECT_EQ(occ[bucket], 1u);
+    EXPECT_EQ(rt.size(), 1u);
+}
+
+TEST(RoutingTable, PeersReceivedCountsEveryAdd)
+{
+    dht::NodeId self{};
+    dht::RoutingTable rt(self);
+
+    dht::NodeId id{};
+    id.bytes[19] = 0x80;
+    dht::RoutingEntry entry{id, PeerAddress("127.0.0.1", 6881)};
+
+    rt.add(entry);
+    auto recv = rt.peers_received_per_bucket();
+    const size_t bucket = first_bucket_with(recv, 1u);
+    EXPECT_EQ(recv[bucket], 1u);
+
+    // MRU update of an existing entry still counts as received.
+    rt.add(entry);
+    recv = rt.peers_received_per_bucket();
+    EXPECT_EQ(recv[bucket], 2u);
+
+    // Persistence restore should not inflate receive counters.
+    rt.add(entry, false);
+    recv = rt.peers_received_per_bucket();
+    EXPECT_EQ(recv[bucket], 2u);
+}
+
+TEST(RoutingTable, PeersReceivedWhenBucketFull)
+{
+    dht::NodeId self{};
+    dht::RoutingTable rt(self);
+    constexpr size_t target_bucket = 42;
+
+    for (unsigned i = 0; i < dht::RoutingTable::K; ++i)
+    {
+        dht::NodeId id = id_for_bucket(target_bucket, i);
+        EXPECT_EQ(rt.bucket_index(id), target_bucket);
+        rt.add({id, PeerAddress("127.0.0.1", static_cast<uint16_t>(7000 + i))});
+    }
+
+    EXPECT_EQ(rt.bucket_occupancy()[target_bucket], dht::RoutingTable::K);
+
+    dht::NodeId extra = id_for_bucket(target_bucket, 999);
+    EXPECT_EQ(rt.bucket_index(extra), target_bucket);
+    rt.add({extra, PeerAddress("127.0.0.1", 7999)});
+
+    const auto recv = rt.peers_received_per_bucket();
+    EXPECT_EQ(recv[target_bucket],
+              static_cast<size_t>(dht::RoutingTable::K) + 1u);
+    EXPECT_EQ(rt.bucket_occupancy()[target_bucket], dht::RoutingTable::K);
 }

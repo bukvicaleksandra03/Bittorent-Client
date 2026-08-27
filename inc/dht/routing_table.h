@@ -70,13 +70,17 @@ class RoutingTable
     static constexpr size_t NUM_BUCKETS = 160;
     static constexpr size_t K = 8;
 
+    using BucketSnapshot = std::array<size_t, NUM_BUCKETS>;
+
     explicit RoutingTable(const NodeId& self_id);
 
     // Same DHT logger as DhtClient (set via set_dht_logger before start()).
     void set_dht_logger(std::shared_ptr<logger::Logger> logger);
 
     // Add or update a node in the appropriate k-bucket.
-    void add(const RoutingEntry& entry);
+    // When count_as_received is true, increments peers_received_per_bucket_
+    // for that bucket (including MRU updates and drops when the bucket is full).
+    void add(const RoutingEntry& entry, bool count_as_received = true);
 
     // Remove a node by ID (e.g., after it fails to respond).
     void remove(const NodeId& id);
@@ -86,6 +90,12 @@ class RoutingTable
 
     // Number of nodes currently in the table.
     size_t size() const;
+
+    // Current occupancy per bucket (0..K entries each).
+    BucketSnapshot bucket_occupancy() const;
+
+    // Cumulative peers learned per bucket (network adds only unless opted in).
+    BucketSnapshot peers_received_per_bucket() const;
 
     // Return all nodes (useful for persistence / bootstrap refresh).
     std::vector<RoutingEntry> all() const;
@@ -119,6 +129,7 @@ class RoutingTable
     std::shared_ptr<logger::Logger> dht_logger_;
     std::array<Bucket, NUM_BUCKETS> buckets_{};
     std::array<size_t, NUM_BUCKETS> bucket_sizes_{};
+    std::array<size_t, NUM_BUCKETS> peers_received_per_bucket_{};
 
     // Same as all(), but assumes mutex_ is already held.
     std::vector<RoutingEntry> all_unlocked() const;

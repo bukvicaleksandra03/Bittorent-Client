@@ -3,12 +3,17 @@
 #include <algorithm>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
 #include "peer_wire/peer_connection.h"
 #include "trackers/tracker_communicator_factory.h"
 #include "utils.h"
+
+namespace fs = std::filesystem;
 
 TorrentManager::TorrentManager(std::unique_ptr<TorrentFile> torrent,
                                const std::string& output_dir,
@@ -62,6 +67,8 @@ void TorrentManager::start()
         LLOG_WARNING(*m_logger, "start() called more than once, ignoring");
         return;
     }
+
+    m_start_steady = std::chrono::steady_clock::now();
 
     m_peer_id = utils::generate_peer_id();
     m_tracker =
@@ -488,4 +495,121 @@ std::string TorrentManager::info_hash_str() const
 std::string TorrentManager::info_hash_hex() const
 {
     return m_torrent->get_info_hash_hex();
+}
+
+void TorrentManager::record_download_sample(double download_bps)
+{
+    if (download_bps > m_peak_speed_bps)
+    {
+        m_peak_speed_bps = download_bps;
+    }
+}
+
+void TorrentManager::mark_complete_at(
+    std::chrono::steady_clock::time_point when)
+{
+    if (m_complete_steady == std::chrono::steady_clock::time_point{})
+    {
+        m_complete_steady = when;
+    }
+}
+
+TorrentRunSummary TorrentManager::build_run_summary() const
+{
+    TorrentRunSummary summary;
+    summary.torrent_name = torrent_name();
+    summary.info_hash_hex = info_hash_hex();
+    summary.size = utils::format_byte_size(total_bytes());
+    summary.complete = is_complete();
+    summary.dht_peers_discovered = dht_peers_discovered();
+    summary.peer_workers_started = peer_workers_started();
+    summary.peer_handshakes_ok = peer_handshakes_ok();
+    summary.peer_handshake_failed = peer_handshake_failed();
+    summary.peer_run_failed = peer_run_failed();
+    summary.piece_hash_failures = piece_hash_failures();
+    summary.peak_speed_bps = m_peak_speed_bps;
+
+    const auto start = m_start_steady;
+    auto end = std::chrono::steady_clock::now();
+    if (m_complete_steady != std::chrono::steady_clock::time_point{})
+    {
+        end = m_complete_steady;
+    }
+
+    double duration_sec = 0.0;
+    if (start != std::chrono::steady_clock::time_point{})
+    {
+        duration_sec = std::chrono::duration<double>(end - start).count();
+    }
+    summary.duration = utils::format_duration(duration_sec);
+
+    if (duration_sec > 0.0)
+    {
+        summary.avg_speed_bps =
+            static_cast<double>(downloaded_bytes()) / duration_sec;
+    }
+
+    return summary;
+}
+
+bool TorrentManager::try_mark_summary_written() const
+{
+    bool expected = false;
+    return m_summary_written.compare_exchange_strong(
+        expected, true, std::memory_order_relaxed);
+}
+
+void TorrentManager::write_run_summary_json(
+    const TorrentRunSummary& summary,
+    const std::string& output_path,
+    std::optional<bool> reference_match)
+{
+    fs::create_directories(fs::path(output_path).parent_path());
+
+    std::ofstream out(output_path);
+    if (!out)
+    {
+        return;
+    }
+
+    out << std::fixed << std::setprecision(2);
+    out << "{\n";
+    out << "  \"torrent_name\": \"" << utils::json_escape(summary.torrent_name)
+        << "\",\n";
+    out << "  \"info_hash_hex\": \"" << utils::json_escape(summary.info_hash_hex)
+        << "\",\n";
+    out << "  \"duration\": \"" << utils::json_escape(summary.duration)
+        << "\",\n";
+    out << "  \"size\": \"" << utils::json_escape(summary.size) << "\",\n";
+    out << "  \"avg_speed\": \""
+        << utils::json_escape(utils::format_byte_rate(summary.avg_speed_bps))
+        << "\",\n";
+    out << "  \"peak_speed\": \""
+        << utils::json_escape(utils::format_byte_rate(summary.peak_speed_bps))
+        << "\",\n";
+    out << std::setprecision(0);
+    out << "  \"dht_peers_discovered\": " << summary.dht_peers_discovered
+        << ",\n";
+    out << "  \"peer_workers_started\": " << summary.peer_workers_started
+        << ",\n";
+    out << "  \"peer_handshakes_ok\": " << summary.peer_handshakes_ok << ",\n";
+    out << "  \"peer_handshake_failed\": " << summary.peer_handshake_failed
+        << ",\n";
+    out << "  \"peer_run_failed\": " << summary.peer_run_failed << ",\n";
+    out << "  \"piece_hash_failures\": " << summary.piece_hash_failures
+        << ",\n";
+    out << "  \"complete\": " << (summary.complete ? "true" : "false");
+    if (reference_match.has_value())
+    {
+        out << ",\n  \"reference_match\": "
+            << (reference_match.value() ? "true" : "false");
+    }
+    out << "\n}\n";
+}
+
+void TorrentManager::write_run_summary_json(
+    const std::string& output_path,
+    std::optional<bool> reference_match) const
+{
+    write_run_summary_json(build_run_summary(), output_path, reference_match);
 }

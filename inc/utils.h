@@ -67,6 +67,52 @@ inline std::string format_byte_rate(double bytes_per_sec)
     return with_unit(bytes_per_sec / gib, "GiB/s");
 }
 
+// Elapsed time with seconds, e.g. "2m 15s", "1h 3m 42s".
+inline std::string format_duration(double seconds)
+{
+    if (seconds < 0.0)
+    {
+        seconds = 0.0;
+    }
+    const uint64_t total = static_cast<uint64_t>(seconds);
+    const uint64_t hours = total / 3600;
+    const uint64_t mins = (total % 3600) / 60;
+    const uint64_t secs = total % 60;
+
+    if (hours > 0)
+    {
+        return std::to_string(hours) + "h " + std::to_string(mins) + "m " +
+               std::to_string(secs) + "s";
+    }
+    if (mins > 0)
+    {
+        return std::to_string(mins) + "m " + std::to_string(secs) + "s";
+    }
+    return std::to_string(secs) + "s";
+}
+
+// Elapsed time without seconds, e.g. "2h 15m".
+inline std::string format_duration_hours_minutes(double seconds)
+{
+    if (seconds < 0.0)
+    {
+        seconds = 0.0;
+    }
+    const uint64_t total = static_cast<uint64_t>(seconds);
+    const uint64_t hours = total / 3600;
+    const uint64_t mins = (total % 3600) / 60;
+
+    if (hours > 0)
+    {
+        return std::to_string(hours) + "h " + std::to_string(mins) + "m";
+    }
+    if (mins > 0)
+    {
+        return std::to_string(mins) + "m";
+    }
+    return std::to_string(total) + "s";
+}
+
 // ---------------------------------------------------------------------------
 
 inline bool is_power_of_two(uint64_t n)
@@ -122,6 +168,37 @@ inline std::string sanitize_filename(const std::string& name)
         else
         {
             out += '_';
+        }
+    }
+    return out;
+}
+
+inline std::string json_escape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s)
+    {
+        switch (c)
+        {
+            case '\\':
+                out += "\\\\";
+                break;
+            case '"':
+                out += "\\\"";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                out += c;
+                break;
         }
     }
     return out;
