@@ -58,7 +58,6 @@ my torrent - 5min 55s, avg.speed 12.88 MiB/s
 
 qBittorent - 33s, avg. speed 22.9 MiB/s
 
-my torrent - 53s, avg. speed 14.06 MiB/s
 
 {
   "torrent_name": "debian-13.5.0-amd64-netinst.iso",
@@ -185,4 +184,33 @@ my_torrent - 5min 55s, avg. speed 15.3MiB/s
   "piece_hash_failures": 0,
   "complete": true,
   "reference_match": true
+}
+
+
+
+
+
+{
+  "bootstrap_skipped": true,
+  "loaded_entries_at_start": 24,
+  "routing_table_total": 60,
+  "routing_table_good": 58,
+  "uptime": "5m",
+  "buckets": [
+    "1: 8(171)",
+    "2: 8(202)",
+    "3: 5(3)",
+    "4: 2(4)",
+    "5: 8(8)",
+    "6: 8(11)",
+    "7: 2(2)",
+    "8: 1(1)",
+    "9: 8(29)",
+    "10: 1(1)",
+    "14: 4(4)",
+    "15: 2(2)",
+    "16: 1(7)",
+    "18: 1(13)",
+    "123: 1(1)"
+  ]
 }

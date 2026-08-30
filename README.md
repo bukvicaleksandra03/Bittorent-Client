@@ -100,18 +100,6 @@ DhtClient
 
 On shutdown, `DhtClient::stop()` saves the table when persistence is enabled. Integration scripts (`download_torrent.sh`, `download_parallel_torrents.sh`) point `DHT_ROUTING_TABLE_PATH` at the project copy under `routing_table_store/`.
 
-**Run metrics**
-
-Long-running integration tests write JSON under `logs/metrics/` automatically (no manual flush in test code):
-
-| File | Source |
-|------|--------|
-| `<torrent>_summary.json` | `TorrentRunSummary` from `TorrentManager` (duration, speeds, peer/DHT counters) |
-| `dht_summary.json` | `DhtRunSummary` from `DhtClient` (bootstrap latency, bucket fill) |
-| `parallel_batch_summary.json` | Combined run when multiple torrents finish in one `SessionManager` |
-
-Set the output directory with `TORRENT_METRICS_DIR`. Optional `reference_match` is included when reference verification runs.
-
 ---
 
 ## Requirements

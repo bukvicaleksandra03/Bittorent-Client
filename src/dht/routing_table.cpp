@@ -123,10 +123,15 @@ size_t RoutingTable::bucket_index(const NodeId& id) const
         for (int bit = 7; bit >= 0; --bit)
         {
             if (b & (1u << bit))
-                return byte_idx * 8 + static_cast<size_t>(7 - bit);
+            {
+                const size_t msb_index =
+                    byte_idx * 8 + static_cast<size_t>(7 - bit);
+                return (NUM_BUCKETS - 1) - msb_index;
+            }
         }
     }
-    return NUM_BUCKETS - 1;
+    // dist != 0, па би горњи циклус увек требало да врати вредност.
+    return 0;
 }
 
 RoutingEntry* RoutingTable::find_in_bucket(size_t bucket, const NodeId& id)
@@ -313,16 +318,19 @@ NodeId RoutingTable::random_id_in_bucket(size_t bucket) const
     static thread_local std::mt19937 gen(std::random_device{}());
     static thread_local std::uniform_int_distribution<int> bit_dist(0, 1);
 
-    const size_t byte_idx = bucket / 8;
-    const int bit_in_byte = 7 - static_cast<int>(bucket % 8);
+    const size_t msb_index = (NUM_BUCKETS - 1) - bucket;
+    const size_t byte_idx = msb_index / 8;
+    const int bit_in_byte = 7 - static_cast<int>(msb_index % 8);
 
     id.bytes[byte_idx] ^=
         static_cast<uint8_t>(1u << static_cast<unsigned>(bit_in_byte));
 
-    for (size_t b = bucket + 1; b < NUM_BUCKETS; ++b)
+    // Насумично попуни мање значајне битове (индекси > msb_index) тако да
+    // цео ID остане у истом интервалу удаљености.
+    for (size_t idx = msb_index + 1; idx < NUM_BUCKETS; ++idx)
     {
-        const size_t bi = b / 8;
-        const int bb = 7 - static_cast<int>(b % 8);
+        const size_t bi = idx / 8;
+        const int bb = 7 - static_cast<int>(idx % 8);
         if (bit_dist(gen))
             id.bytes[bi] |=
                 static_cast<uint8_t>(1u << static_cast<unsigned>(bb));

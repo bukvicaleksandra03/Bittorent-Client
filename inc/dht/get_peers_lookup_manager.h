@@ -8,12 +8,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include "info_hash.h"
-#include "logger.h"
 #include "dht/kademlia_lookup.h"
 #include "dht/krpc.h"
 #include "dht/node_id.h"
 #include "dht/routing_table.h"
+#include "info_hash.h"
+#include "logger.h"
 #include "peer_address.h"
 
 namespace dht

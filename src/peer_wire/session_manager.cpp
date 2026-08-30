@@ -334,7 +334,8 @@ void SessionManager::print_status_locked(std::ostream& os) const
            << "  " << std::setw(14) << std::left << speed_str << "  "
            << state_str << "\n";
 
-        os << "    DHT peers discovered: " << s->dht_peers_discovered() << "\n";
+        const size_t dht_peers = s->dht_peers_discovered();
+        os << "    DHT peers discovered: " << dht_peers << "\n";
 
         // While seeding, show what we have served: total uploaded, the number
         // of blocks/pieces served, and the current upload rate.
@@ -361,9 +362,10 @@ void SessionManager::print_status_locked(std::ostream& os) const
                << utils::format_byte_rate(up_speed) << "\n";
         }
 
-        // Print top 10 peers by bytes downloaded.
+        // Print top 10 peers by bytes downloaded, but only while the torrent
+        // is still downloading (not in seeding state).
         const auto peers = s->top_peers(10);
-        if (!peers.empty())
+        if (!seeding && !peers.empty())
         {
             os << "    ---- top peers (download) ----\n";
             for (const auto& p : peers)

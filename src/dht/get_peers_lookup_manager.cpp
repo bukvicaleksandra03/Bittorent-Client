@@ -227,9 +227,10 @@ void GetPeersLookupManager::expire_active_lookups_locked()
     {
         if (now - it->second.started() >= GET_PEERS_LOOKUP_TTL)
         {
+            const InfoHash hash = it->first;
             for (const auto& txn : it->second.pending_txns())
                 pending_lookups_.erase(txn);
-            expired_hashes.push_back(it->first.hex());
+            expired_hashes.push_back(hash.hex());
             it = kademlia_lookups_.erase(it);
         }
         else
@@ -288,8 +289,8 @@ bool GetPeersLookupManager::lookup_should_finish(KademliaLookup& lookup,
     return true;
 }
 
-GetPeersLookupManager::AdvanceResult
-GetPeersLookupManager::advance_lookup(const InfoHash& info_hash)
+GetPeersLookupManager::AdvanceResult GetPeersLookupManager::advance_lookup(
+    const InfoHash& info_hash)
 {
     log_debug("Advance lookup for " + info_hash.hex());
     AdvanceResult result;

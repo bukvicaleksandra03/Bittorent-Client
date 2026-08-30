@@ -447,8 +447,9 @@ size_t DhtClient::live_peer_count(const InfoHash& info_hash) const
 void DhtClient::log_get_peers_lookup_completed(
     const InfoHash& info_hash) const
 {
+    const size_t peers = live_peer_count(info_hash);
     log_dht_info("get_peers lookup completed for " + info_hash.hex() + ": " +
-                 std::to_string(live_peer_count(info_hash)) + " live peer(s)");
+                 std::to_string(peers) + " live peer(s)");
 }
 
 void DhtClient::set_dht_logger(std::shared_ptr<logger::Logger> logger)

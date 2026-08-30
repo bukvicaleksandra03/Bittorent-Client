@@ -33,7 +33,7 @@ fi
 
 echo "Using torrent: ${TORRENT_PATH}"
 
-make test_single_torrent
+make j8 test_single_torrent
 
 env TORRENT_PATH="${TORRENT_PATH}" \
     TORRENT_METRICS_DIR="${PROJECT_DIR}/logs/metrics" \

@@ -33,6 +33,6 @@ env PARALLEL_TORRENT_COUNT="${COUNT}" \
     TORRENT_TEST_OUT="${PROJECT_DIR}/torrent_files/downloaded/parallel" \
     TORRENT_METRICS_DIR="${PROJECT_DIR}/logs/metrics" \
     TORRENT_SKIP_REFERENCE="${TORRENT_SKIP_REFERENCE:-1}" \
-    DHT_ROUTING_TABLE_PATH="${PROJECT_DIR}/routing_table_store/routing_table.txt" \
+    DHT_CLEAR_ROUTING=1 \
     RUN_PARALLEL_TORRENTS_TEST=1 \
     "${PROJECT_DIR}/out/test_parallel_torrents"

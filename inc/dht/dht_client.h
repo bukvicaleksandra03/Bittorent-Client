@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "dht/announce_coordinator.h"
@@ -37,7 +38,8 @@ struct DhtPerformanceSnapshot
 {
     bool bootstrap_skipped{false};
     bool bootstrap_complete{false};
-    // Seconds until the first good routing entry after bootstrap; 0 on warm start.
+    // Seconds until the first good routing entry after bootstrap; 0 on warm
+    // start.
     double bootstrap_latency_sec{-1.0};
     size_t loaded_entries_at_start{0};
     size_t routing_table_total{0};
@@ -45,7 +47,8 @@ struct DhtPerformanceSnapshot
     double uptime_sec{0.0};
 };
 
-// Run metrics captured before the DHT node stops (one summary file per node run).
+// Run metrics captured before the DHT node stops (one summary file per node
+// run).
 struct DhtRunSummary
 {
     DhtPerformanceSnapshot dht;
@@ -83,8 +86,9 @@ class DhtClient
     // nodes (for loopback/unit tests).  Must be set before start().
     void set_bootstrap_on_start(bool enabled);
 
-    // Persist routing table to disk (default path: routing_table_store/routing_table.txt).
-    // Must be configured before start().
+    // Persist routing table to disk (default path:
+    // routing_table_store/routing_table.txt). Must be configured before
+    // start().
     void set_routing_table_path(const std::string& path);
     void set_persist_routing_table(bool enabled);
     // When true, delete persisted file on start() and always bootstrap.
@@ -126,7 +130,8 @@ class DhtClient
     // Number of nodes currently in the routing table.
     size_t routing_table_size() const;
 
-    // Entries considered "good" by the routing table (used for warm-start skip).
+    // Entries considered "good" by the routing table (used for warm-start
+    // skip).
     size_t good_routing_entries() const;
 
     // Bootstrap and routing-table metrics for benchmarking / thesis plots.
